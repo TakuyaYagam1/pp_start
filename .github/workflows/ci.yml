@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  devops:
+    name: devops checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v2.2.0
+        with:
+          version: v5.1.4
+
+      - name: Check required files
+        run: |
+          set -euo pipefail
+          test -f .env.example
+          test -f .gitignore
+          test -f .dockerignore
+          test -f Dockerfile
+          test -f docker-compose.yml
+          test -f requirements.txt
+          test -f README.md
+
+      - name: Prepare local env for compose validation
+        run: cp .env.example .env
+
+      - name: Validate docker compose config
+        run: docker compose config >/dev/null
+
+      - name: Build bot image
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: .
+          file: ./Dockerfile
+          pull: true
+          push: false
+          tags: anti-spam-telegram-bot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start redis
+        run: docker compose up -d redis
+
+      - name: Check redis health
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            if [ "$(docker compose exec -T redis redis-cli ping 2>/dev/null || true)" = "PONG" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs redis
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans

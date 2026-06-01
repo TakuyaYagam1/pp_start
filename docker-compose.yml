@@ -1,0 +1,48 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anti-spam-telegram-bot:local
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      LOG_FILE: /app/logs/spam.log
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - bot_logs:/app/logs
+    restart: unless-stopped
+    stop_grace_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:8.8.0-alpine3.23
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  bot_logs:
+  redis_data:
