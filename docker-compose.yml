@@ -3,12 +3,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: anti-spam-telegram-bot:local
-    env_file:
-      - .env
+    image: anti-spam-telegram-bot
     environment:
-      REDIS_URL: redis://redis:6379/0
-      LOG_FILE: /app/logs/spam.log
+      BOT_TOKEN: ${BOT_TOKEN:-replace_me}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      VERIFY_TIMEOUT_SECONDS: ${VERIFY_TIMEOUT_SECONDS:-180}
+      ACTION_MODE: ${ACTION_MODE:-notify_admin}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_ID: ${ADMIN_ID:-}
+      LLM_API_KEY: ${LLM_API_KEY:-replace_me}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.example.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-replace_me}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-8}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE: ${LOG_FILE:-/app/logs/spam.log}
     depends_on:
       redis:
         condition: service_healthy

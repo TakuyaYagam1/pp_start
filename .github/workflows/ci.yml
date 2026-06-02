@@ -14,52 +14,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
-      - name: Detect tests
-        id: tests
-        run: |
-          set -euo pipefail
-          if find . \
-            -path './.git' -prune -o \
-            -path './.venv' -prune -o \
-            -path './venv' -prune -o \
-            -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
-            -print -quit | grep -q .; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Set up Python
-        if: steps.tests.outputs.found == 'true'
         uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: pyproject.toml
 
       - name: Install test dependencies
-        if: steps.tests.outputs.found == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install ".[dev]"
 
       - name: Run pytest
-        if: steps.tests.outputs.found == 'true'
         run: python -m pytest -ra --junitxml=pytest-results.xml
 
       - name: Upload pytest results
-        if: always() && steps.tests.outputs.found == 'true'
+        if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
           name: pytest-results
           path: pytest-results.xml
           if-no-files-found: error
-
-      - name: Skip pytest
-        if: steps.tests.outputs.found != 'true'
-        run: echo "No pytest files found; skipping tests job."
 
   devops:
     name: devops checks
@@ -85,7 +62,7 @@ jobs:
           test -f .dockerignore
           test -f Dockerfile
           test -f docker-compose.yml
-          test -f requirements.txt
+          test -f pyproject.toml
           test -f README.md
 
       - name: Lint Python with Ruff

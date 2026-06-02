@@ -11,16 +11,15 @@ WORKDIR /app
 RUN groupadd --system app && \
     useradd --system --gid app --home-dir /app app
 
-COPY requirements.txt ./
+COPY pyproject.toml README.md ./
+COPY app ./app
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip && \
-    if [ -s requirements.txt ]; then python -m pip install -r requirements.txt; fi
-
-COPY . .
+    python -m pip install .
 
 RUN mkdir -p /app/logs && \
     chown -R app:app /app
 
 USER app
 
-CMD ["python", "-m", "app.main"]
+CMD ["python", "-m", "app"]

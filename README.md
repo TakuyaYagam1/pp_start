@@ -4,7 +4,8 @@ Telegram-бот для защиты групп и топиков от спама
 
 ## Возможности
 
-- Верификация новых участников через кнопку или команду `/verify`.
+- Верификация новых участников через Telegram join request и приватную кнопку.
+- До прохождения проверки пользователь не попадает в группу, не читает чат и не пишет сообщения.
 - Таймаут подтверждения: 3 минуты.
 - Корректная работа в Telegram-топиках через `message_thread_id`.
 - Быстрая проверка сообщений по стоп-словам.
@@ -13,19 +14,20 @@ Telegram-бот для защиты групп и топиков от спама
   - `delete`: удалить сообщение и заблокировать пользователя;
   - `notify_admin`: уведомить администратора.
 - Логирование действий бота.
+- Если пользователь не прошел проверку за 3 минуты, бот отклоняет заявку, банит пользователя в группе и добавляет его в Redis blacklist.
 - Redis для временного состояния верификации и служебных данных.
 
 ## Системный дизайн
 
 ```text
-Telegram group / topics
+Telegram join request
         |
         | long polling
         v
 Telegram bot container
   Python + aiogram
         |
-        | pending verification, TTL, flags
+        | private challenge, pending verification, TTL, flags
         v
 Redis container
 
@@ -34,6 +36,67 @@ message -> stop words -> LLM check -> delete / notify admin -> log
 ```
 
 Для v1 используется long polling: приложению не нужен публичный HTTP-порт, домен или TLS. Redis работает только во внутренней Docker Compose-сети и не публикуется наружу.
+
+## Структура проекта
+
+```text
+pyproject.toml            # project metadata, runtime deps, Ruff/Pytest config
+app/
+  __main__.py              # package entrypoint: python -m app
+  config/
+    settings.py            # pydantic-settings и .env
+  core/
+    models.py              # domain models/enums
+    stopwords.py           # domain stop-word rules
+    services/              # application/domain services
+    llm/
+      client.py            # LLM client facade
+      prompts.py           # LLM prompt builders
+  cache/
+    redis.py               # Redis client lifecycle and repositories
+  tg_bot/
+    handlers/              # Telegram transport routers: admin/user + feature routers
+    keyboards/             # Telegram reply/inline UI builders
+    middlewares/           # aiogram middleware extension points, Redis DI
+    states/                # FSM extension points
+    utils/                 # Telegram texts/helpers
+```
+
+Handlers remain thin: they read Telegram updates, validate transport-specific fields and call services. Business rules for verification, spam detection, moderation actions, Redis repositories and LLM access live outside Telegram handlers. This keeps tests focused and allows replacing the transport layer without rewriting core behavior.
+
+PostgreSQL, Alembic, `app/database/` and `migrations/` are intentionally not included in v1: the current product requirements use Redis-only storage. A relational layer should be added only when persistent relational data is required.
+
+## Хранилище и LLM
+
+Бот не использует базу данных. Все служебное состояние хранится в Redis:
+
+- `verify:{chat_id}:{user_id}` - pending verification с TTL, id приватного challenge-сообщения, `verification_chat_id`, `message_thread_id` для legacy-записей и временем создания;
+- `verified:{chat_id}:{user_id}` - отметка, что пользователь прошел верификацию;
+- `blacklist:{chat_id}:{user_id}` - пользователь, удаленный за спам;
+- `llm:{sha256}` - кеш ответа LLM на нормализованный текст сообщения.
+
+При старте приложение выполняет `PING` Redis и восстанавливает таймеры для активных `verify:*` ключей. Если ключ поврежден или не имеет TTL, он безопасно удаляется и событие пишется в лог. Восстановленный timeout для join request отклоняет заявку, банит пользователя и добавляет его в Redis blacklist.
+
+## UX верификации
+
+Для полного сценария защиты группа должна использовать заявки на вступление: включите approve новых участников в настройках группы или создайте invite link с join request. В этом режиме пользователь сначала отправляет заявку, но еще не становится участником группы.
+
+Бот получает `chat_join_request`, отправляет пользователю приватное сообщение с предупреждением `⚠️` и кнопкой `✅ Я человек`, затем ждет до `VERIFY_TIMEOUT_SECONDS`, по умолчанию 180 секунд. Пока пользователь не нажал кнопку, Telegram не дает ему читать чат и отправлять сообщения, потому что заявка еще не одобрена.
+
+После нажатия кнопки бот вызывает `approve_chat_join_request`, удаляет приватное challenge-сообщение, отправляет личное `✅ Готово, доступ открыт`, отмечает пользователя как verified и очищает pending-запись. Если timeout истек, бот отправляет личное `❌ Проверка не пройдена`, вызывает `decline_chat_join_request`, `ban_chat_member`, добавляет пользователя в `blacklist:{chat_id}:{user_id}` и удаляет pending-запись.
+
+LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. LLM вызывается только после совпадения stop-word. Ответы `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе применяется fallback на результат stop-word проверки.
+
+## Словари stop-words
+
+Базовые spam-маркеры вынесены из Python-кода в packaged data:
+
+- `app/core/data/stopwords/spam_ru.txt` - русские фразы;
+- `app/core/data/stopwords/spam_en.txt` - английские фразы.
+
+Формат простой: один термин или фраза на строку. Пустые строки и строки с `#` игнорируются, дубли убираются регистронезависимо. После изменения словарей достаточно пересобрать контейнер: `docker compose up -d --build`.
+
+Внешние profanity-листы можно импортировать позже отдельной задачей, но их нельзя слепо смешивать с текущими spam-словами. Такие списки чаще ловят мат и оскорбления, а не рекламу казино, крипты, займов и мошеннических ссылок. Перед импортом нужно проверить лицензию, язык, качество терминов и риск ложных срабатываний.
 
 ## Стек
 
@@ -70,7 +133,6 @@ docker compose down
 
 ```env
 BOT_TOKEN=...
-BOT_RUN_MODE=polling
 REDIS_URL=redis://redis:6379/0
 VERIFY_TIMEOUT_SECONDS=180
 ACTION_MODE=notify_admin
@@ -84,10 +146,35 @@ LOG_LEVEL=INFO
 LOG_FILE=/app/logs/spam.log
 ```
 
+Назначение переменных:
+
+- `BOT_TOKEN` - токен Telegram-бота из BotFather.
+- `REDIS_URL` - адрес Redis внутри Compose-сети.
+- `VERIFY_TIMEOUT_SECONDS` - время ожидания верификации нового пользователя.
+- `ACTION_MODE` - реакция на спам: `delete` или `notify_admin`.
+- `ADMIN_USERNAME` / `ADMIN_ID` - получатель уведомлений для `notify_admin`; достаточно одного значения.
+- `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` - параметры OpenAI-compatible LLM provider.
+- `LOG_LEVEL` и `LOG_FILE` - уровень логирования и путь к `spam.log`.
+
 `ACTION_MODE` принимает значения:
 
 - `delete`: удалить спам-сообщение и заблокировать пользователя;
 - `notify_admin`: отправить уведомление администратору.
+
+Режим можно переключать без изменения `.env` и без рестарта контейнера. Администратор из `ADMIN_ID` или `ADMIN_USERNAME` может открыть панель командой `/admin` или `/help`, а затем выбрать режим inline-кнопками `Удалять спам`, `Только уведомлять` или `Сбросить к env`.
+
+Также доступны текстовые команды:
+
+```text
+/admin
+/help
+/mode
+/mode delete
+/mode notify_admin
+/mode reset
+```
+
+Значение, заданное через `/mode delete` или `/mode notify_admin`, хранится в Redis в ключе `settings:action_mode` и имеет приоритет над `.env`. Команда `/mode reset` удаляет runtime override и возвращает режим из `ACTION_MODE`.
 
 ## Запуск на сервере
 
@@ -110,6 +197,15 @@ docker compose ps
 ```
 
 Адрес сервера, токены и реальные ключи не хранятся в репозитории.
+
+Логи:
+
+```bash
+docker compose logs -f bot
+docker compose exec bot sh -lc 'tail -f /app/logs/spam.log'
+```
+
+`spam.log` содержит структурированные события верификации, timeout-удаления, спам-детекта, действий модерации и безопасно отредактированные ошибки Telegram API.
 
 ## CI/CD
 
@@ -141,6 +237,8 @@ cache-to: type=gha,mode=max
 
 - `.env` не коммитится.
 - Redis не публикуется наружу.
+- Бот должен быть администратором группы с правами на обработку заявок на вступление и ban пользователей: это требуется для приватной join-request верификации.
+- Для `ACTION_MODE=delete` боту также нужны права на удаление сообщений и ban/unban пользователей.
 - Контейнер бота запускается от non-root пользователя.
 - Для контейнера включен `no-new-privileges`.
 - Секреты хранятся только на сервере или в GitHub Secrets для CI/CD.

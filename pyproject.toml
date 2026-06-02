@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anti-spam-telegram-bot"
+version = "0.1.0"
+description = "Telegram anti-spam bot with Redis-backed verification and LLM checks"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiogram>=3,<4",
+    "httpx>=0.28,<1",
+    "pydantic-settings>=2,<3",
+    "redis>=5,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9,<10",
+    "ruff>=0.14,<1",
+]
+
+[project.scripts]
+anti-spam-telegram-bot = "app.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.core.data.stopwords" = ["*.txt"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -16,4 +16,6 @@ logs/
 *.sqlite
 *.db
 *.pdf
-README.md
+tests/
+progress.md
+tasks.json
