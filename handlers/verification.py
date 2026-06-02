@@ -104,11 +104,7 @@ def _cancel_user_tasks(user_id: int, chat_id: int) -> None:
         task.cancel()
 
 
-# T13: registered first — intercepts messages from unverified users before any other handler.
-# IsUnverified filter makes this handler match only for users still in pending_verifications,
-# so verified users' messages fall through to subsequent handlers (spam_flow, etc.).
-# ~Command("verify") excludes /verify so it reaches on_verify_command.
-@router.message(IsUnverified(), ~Command("verify"))
+@router.message(IsUnverified(), ~F.text.startswith("/"))
 async def on_unverified_message(message: Message, bot: Bot) -> None:
     user_id = message.from_user.id
     chat_id = message.chat.id

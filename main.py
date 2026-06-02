@@ -1,6 +1,7 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.types import BotCommand
 from config import BOT_TOKEN
 from db.database import init_db
 from handlers.verification import router
@@ -15,6 +16,7 @@ async def main() -> None:
     bot = Bot(token=BOT_TOKEN, session=session)
     dp = Dispatcher()
     dp.include_router(router)
+    await bot.set_my_commands([BotCommand(command="verify", description="Подтвердить, что я человек")])
     logger.info("Bot starting")
     try:
         await dp.start_polling(
