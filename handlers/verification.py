@@ -18,7 +18,9 @@ router = Router()
 pending_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
 
-async def kick_if_not_verified(bot: Bot, user_id: int, chat_id: int, delay: int = 180) -> None:
+async def kick_if_not_verified(
+    bot: Bot, user_id: int, chat_id: int, delay: int = 180
+) -> None:
     await asyncio.sleep(delay)
     row = await get_pending(user_id, chat_id)
     if row is None:
@@ -50,7 +52,11 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot) -> None:
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Я человек ✅", callback_data=f"verify_{user_id}")]
+            [
+                InlineKeyboardButton(
+                    text="Я человек ✅", callback_data=f"verify_{user_id}"
+                )
+            ]
         ]
     )
 
