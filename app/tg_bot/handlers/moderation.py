@@ -209,7 +209,10 @@ async def _handle_duplicate_flood(
         chat_id=int(chat_id),
         user_id=int(user_id),
     )
-    if warned_digest == state.digest:
+    if warned_digest == state.digest or (
+        warned_digest is not None
+        and len(state.message_ids) >= settings.duplicate_message_warn_threshold
+    ):
         result = SpamDetectionResult(
             is_spam=True,
             reason="duplicate_flood_repeated_after_warning",
@@ -235,6 +238,40 @@ async def _handle_duplicate_flood(
     if len(state.message_ids) < settings.duplicate_message_warn_threshold:
         return None
 
+    marked_warning = await duplicate_message_repository.mark_warned_once(
+        chat_id=int(chat_id),
+        user_id=int(user_id),
+        digest=state.digest,
+    )
+    if not marked_warning:
+        warned_digest = await duplicate_message_repository.get_warning_digest(
+            chat_id=int(chat_id),
+            user_id=int(user_id),
+        )
+        if warned_digest is not None:
+            result = SpamDetectionResult(
+                is_spam=True,
+                reason="duplicate_flood_repeated_after_warning",
+                stop_word=StopWordCheckResult(matched=False),
+                llm_decision=LLMDecision.SPAM,
+                matched_term="duplicate_content",
+            )
+            moderation_result = await moderation_service.kick_duplicate_flood(
+                bot=bot,
+                message=message,
+                spam_result=result,
+                duplicate_message_ids=state.message_ids,
+            )
+            await duplicate_message_repository.clear(
+                chat_id=int(chat_id), user_id=int(user_id)
+            )
+            await duplicate_message_repository.clear_warning(
+                chat_id=int(chat_id),
+                user_id=int(user_id),
+            )
+            return moderation_result
+        return None
+
     result = SpamDetectionResult(
         is_spam=True,
         reason="duplicate_flood",
@@ -247,11 +284,7 @@ async def _handle_duplicate_flood(
         message=message,
         spam_result=result,
         duplicate_message_ids=state.message_ids,
-    )
-    await duplicate_message_repository.mark_warned(
-        chat_id=int(chat_id),
-        user_id=int(user_id),
-        digest=state.digest,
+        warning_message_ttl_seconds=settings.duplicate_warning_message_ttl_seconds,
     )
     await duplicate_message_repository.clear(chat_id=int(chat_id), user_id=int(user_id))
     return moderation_result

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from dataclasses import replace
@@ -141,6 +142,7 @@ class ModerationService:
         message: Any,
         spam_result: SpamDetectionResult,
         duplicate_message_ids: tuple[int, ...],
+        warning_message_ttl_seconds: float | None = None,
         logger: logging.Logger | None = None,
     ) -> SpamDetectionResult:
         chat_id = int(message.chat.id)
@@ -156,7 +158,7 @@ class ModerationService:
             message_ids=duplicate_message_ids,
             logger=event_logger,
         )
-        await _send_duplicate_warning(
+        warning_message = await _send_duplicate_warning(
             bot=bot,
             message=message,
             chat_id=chat_id,
@@ -164,6 +166,19 @@ class ModerationService:
             message_text=message_text,
             logger=event_logger,
         )
+        warning_message_id = getattr(warning_message, "message_id", None)
+        if warning_message_id is not None and warning_message_ttl_seconds is not None:
+            asyncio.create_task(
+                _delete_message_after_delay(
+                    bot=bot,
+                    chat_id=chat_id,
+                    message_id=int(warning_message_id),
+                    delay_seconds=warning_message_ttl_seconds,
+                    user_id=user_id,
+                    message_text=message_text,
+                    logger=event_logger,
+                )
+            )
 
         log_spam_event(
             event_logger,
@@ -297,7 +312,7 @@ async def _send_duplicate_warning(
     user_id: int,
     message_text: str,
     logger: logging.Logger,
-) -> None:
+) -> Any:
     send_kwargs: dict[str, Any] = {
         "chat_id": chat_id,
         "text": (
@@ -309,7 +324,7 @@ async def _send_duplicate_warning(
     if message_thread_id is not None:
         send_kwargs["message_thread_id"] = int(message_thread_id)
 
-    await call_telegram_api(
+    return await call_telegram_api(
         operation=ModerationAction.WARN_USER.value,
         call=bot.send_message(**send_kwargs),
         chat_id=chat_id,
@@ -317,6 +332,30 @@ async def _send_duplicate_warning(
         message_text=message_text,
         logger=logger,
     )
+
+
+async def _delete_message_after_delay(
+    *,
+    bot: Any,
+    chat_id: int,
+    message_id: int,
+    delay_seconds: float,
+    user_id: int,
+    message_text: str,
+    logger: logging.Logger,
+) -> None:
+    await asyncio.sleep(delay_seconds)
+    try:
+        await call_telegram_api(
+            operation=ModerationAction.DELETE_MESSAGE.value,
+            call=bot.delete_message(chat_id=chat_id, message_id=message_id),
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            logger=logger,
+        )
+    except Exception:
+        return
 
 
 def _resolve_notification_target(

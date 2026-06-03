@@ -19,7 +19,15 @@ class FakeRedis:
     values: dict[str, str] = field(default_factory=dict)
     expirations: dict[str, int] = field(default_factory=dict)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         if ex is not None:
             self.expirations[key] = ex
@@ -196,6 +204,36 @@ def test_duplicate_message_repository_marks_and_clears_warning_digest() -> None:
         await repository.clear_warning(chat_id=-100123, user_id=42)
 
         assert await repository.get_warning_digest(chat_id=-100123, user_id=42) is None
+
+    asyncio.run(run())
+
+
+def test_duplicate_message_repository_marks_warning_once() -> None:
+    async def run() -> None:
+        redis = FakeRedis()
+        repository = DuplicateMessageRepository(
+            redis,
+            ttl_seconds=60,
+            warning_ttl_seconds=300,
+        )
+
+        first = await repository.mark_warned_once(
+            chat_id=-100123,
+            user_id=42,
+            digest="first",
+        )
+        second = await repository.mark_warned_once(
+            chat_id=-100123,
+            user_id=42,
+            digest="second",
+        )
+
+        assert first is True
+        assert second is False
+        assert await repository.get_warning_digest(chat_id=-100123, user_id=42) == (
+            "first"
+        )
+        assert redis.expirations["duplicate_message_warning:-100123:42"] == 300
 
     asyncio.run(run())
 

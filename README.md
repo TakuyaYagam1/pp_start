@@ -87,7 +87,7 @@ PostgreSQL, Alembic, `app/database/` and `migrations/` are intentionally not inc
 
 После нажатия кнопки бот вызывает `approve_chat_join_request`, удаляет приватное challenge-сообщение, отправляет личное `✅ Готово, доступ открыт`, отмечает пользователя как verified и очищает pending-запись. Если timeout истек, бот отправляет личное `❌ Проверка не пройдена`, вызывает `decline_chat_join_request`, `ban_chat_member` и удаляет pending-запись.
 
-LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. В обычном spam-flow LLM вызывается только после совпадения stop-word, а ответ кешируется на `LLM_CACHE_TTL_SECONDS`, по умолчанию 300 секунд. Для файлов без текста бот проверяет доступные метаданные: `file_name`, `mime_type`, emoji/set name стикера и caption. Отдельно бот детерминированно отслеживает одинаковые сообщения подряд: текст сравнивается по нормализованной строке, стикеры и медиа - по `file_unique_id`. При достижении `DUPLICATE_MESSAGE_WARN_THRESHOLD` бот удаляет накопленные дубли и предупреждает пользователя, а следующий такой же повтор в течение `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` приводит к kick через ban/unban. Ответы LLM `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе обычный stop-word flow применяет fallback на ключевые слова.
+LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. В обычном spam-flow LLM вызывается только после совпадения stop-word, а ответ кешируется на `LLM_CACHE_TTL_SECONDS`, по умолчанию 300 секунд. Для файлов без текста бот проверяет доступные метаданные: `file_name`, `mime_type`, emoji/set name стикера и caption. Отдельно бот детерминированно отслеживает одинаковые сообщения подряд: текст сравнивается по нормализованной строке, стикеры и медиа - по `file_unique_id`. При достижении `DUPLICATE_MESSAGE_WARN_THRESHOLD` бот удаляет накопленные дубли и предупреждает пользователя. Warning ставится атомарно и не дублируется при параллельной обработке сообщений; следующий duplicate-flood в течение `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` приводит к kick через ban/unban. Ответы LLM `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе обычный stop-word flow применяет fallback на ключевые слова.
 
 ## Словари stop-words
 
@@ -169,6 +169,7 @@ VERIFY_TIMEOUT_SECONDS=180
 DUPLICATE_MESSAGE_WINDOW_SECONDS=60
 DUPLICATE_MESSAGE_WARN_THRESHOLD=3
 DUPLICATE_MESSAGE_WARNING_TTL_SECONDS=300
+DUPLICATE_WARNING_MESSAGE_TTL_SECONDS=60
 ACTION_MODE=notify_admin
 ADMIN_USERNAME=@admin
 ADMIN_ID=
@@ -189,6 +190,7 @@ LOG_FILE=/app/logs/spam.log
 - `DUPLICATE_MESSAGE_WINDOW_SECONDS` - окно, в котором считаются одинаковые сообщения подряд от одного пользователя.
 - `DUPLICATE_MESSAGE_WARN_THRESHOLD` - сколько одинаковых сообщений подряд нужно для удаления дублей и предупреждения.
 - `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` - сколько действует предупреждение перед kick при новом таком же повторе.
+- `DUPLICATE_WARNING_MESSAGE_TTL_SECONDS` - через сколько секунд удалить warning-сообщение бота из чата.
 - `ACTION_MODE` - реакция на спам: `delete` или `notify_admin`.
 - `ADMIN_USERNAME` / `ADMIN_ID` - fallback-получатель уведомлений для `notify_admin`.
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` - параметры OpenAI-compatible LLM provider.

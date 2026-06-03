@@ -41,6 +41,12 @@ class FakeBot:
         self.unbans.append(kwargs)
 
 
+class AutoDeleteFakeBot(FakeBot):
+    async def send_message(self, **kwargs: object) -> SimpleNamespace:
+        self.sent_messages.append(kwargs)
+        return SimpleNamespace(message_id=999)
+
+
 @dataclass
 class FakeBlacklistRepository:
     added: list[tuple[int, int]] = field(default_factory=list)
@@ -87,6 +93,7 @@ class FakeFloodSpamDetectorService:
 class FakeDuplicateMessageRepository:
     state: DuplicateMessageState
     warning_digest: str | None = None
+    mark_warned_once_result: bool = True
     marked_warning_digest: str | None = None
     cleared: bool = False
     warning_cleared: bool = False
@@ -112,6 +119,17 @@ class FakeDuplicateMessageRepository:
         digest: str,
     ) -> None:
         self.marked_warning_digest = digest
+
+    async def mark_warned_once(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        digest: str,
+    ) -> bool:
+        if self.mark_warned_once_result:
+            self.marked_warning_digest = digest
+        return self.mark_warned_once_result
 
     async def clear(self, *, chat_id: int, user_id: int) -> None:
         self.cleared = True
@@ -417,6 +435,93 @@ def test_duplicate_flood_deletes_duplicates_and_warns_user(tmp_path: Path) -> No
         assert duplicate_repository.marked_warning_digest == "same-digest"
         assert duplicate_repository.cleared is True
         assert spam_detector.detect_calls == []
+
+    asyncio.run(run())
+
+
+def test_duplicate_flood_warning_message_is_deleted_after_ttl() -> None:
+    async def run() -> None:
+        bot = AutoDeleteFakeBot()
+
+        result = await ModerationService().warn_duplicate_flood(
+            bot=bot,
+            message=_message(message_thread_id=777),
+            spam_result=SpamDetectionResult(
+                is_spam=True,
+                reason="duplicate_flood",
+                stop_word=StopWordCheckResult(matched=False),
+                llm_decision=LLMDecision.UNKNOWN,
+                matched_term="duplicate_content",
+            ),
+            duplicate_message_ids=(11, 12, 13),
+            warning_message_ttl_seconds=0,
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert result.moderation_action == ModerationAction.WARN_USER
+        assert bot.sent_messages == [
+            {
+                "chat_id": -100123,
+                "text": (
+                    "⚠️ Обнаружены одинаковые сообщения подряд. "
+                    "Повторный flood приведет к исключению из группы."
+                ),
+                "message_thread_id": 777,
+            }
+        ]
+        assert bot.deleted_messages[-1] == {"chat_id": -100123, "message_id": 999}
+
+    asyncio.run(run())
+
+
+def test_duplicate_flood_after_any_active_warning_kicks_without_new_warning(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        log_file = tmp_path / "spam.log"
+        settings = _settings(action_mode="notify_admin", log_file=log_file)
+        bot = FakeBot()
+        duplicate_repository = FakeDuplicateMessageRepository(
+            state=DuplicateMessageState(
+                chat_id=-100123,
+                user_id=42,
+                digest="new-digest",
+                content_key="sticker:new-sticker",
+                message_ids=(21, 22, 23),
+            ),
+            warning_digest="old-digest",
+        )
+
+        result = await handle_text_message(
+            message=_message(
+                message_id=23,
+                text=None,
+                sticker_unique_id="new-sticker",
+            ),
+            spam_detector_service=FakeFloodSpamDetectorService(),
+            blacklist_repository=FakeBlacklistRepository(),
+            settings=settings,
+            moderation_service=ModerationService(),
+            runtime_settings_repository=FakeRuntimeSettingsRepository(
+                action_mode=ActionMode.NOTIFY_ADMIN
+            ),
+            duplicate_message_repository=duplicate_repository,
+            bot=bot,
+        )
+
+        assert result is not None
+        assert result.moderation_action == ModerationAction.BAN_UNBAN
+        assert result.reason == "duplicate_flood_repeated_after_warning"
+        assert bot.sent_messages == []
+        assert bot.deleted_messages == [
+            {"chat_id": -100123, "message_id": 21},
+            {"chat_id": -100123, "message_id": 22},
+            {"chat_id": -100123, "message_id": 23},
+        ]
+        assert bot.bans == [{"chat_id": -100123, "user_id": 42}]
+        assert bot.unbans == [{"chat_id": -100123, "user_id": 42}]
+        assert duplicate_repository.warning_cleared is True
 
     asyncio.run(run())
 

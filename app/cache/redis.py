@@ -260,6 +260,21 @@ class DuplicateMessageRepository:
             ex=self._warning_ttl_seconds,
         )
 
+    async def mark_warned_once(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        digest: str,
+    ) -> bool:
+        was_set = await self._redis.set(
+            self.warning_key(chat_id, user_id),
+            digest,
+            ex=self._warning_ttl_seconds,
+            nx=True,
+        )
+        return bool(was_set)
+
     async def clear_warning(self, *, chat_id: int, user_id: int) -> None:
         await self._redis.delete(self.warning_key(chat_id, user_id))
 
