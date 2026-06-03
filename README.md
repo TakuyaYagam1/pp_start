@@ -10,6 +10,7 @@ Telegram-бот для защиты групп и топиков от спама
 - Корректная работа в Telegram-топиках через `message_thread_id`.
 - Быстрая проверка сообщений по стоп-словам.
 - Дополнительная LLM-проверка подозрительных сообщений.
+- Flood-защита: одинаковые сообщения подряд проверяются через LLM, удаляются с предупреждением, а повтор после предупреждения приводит к исключению.
 - Два режима реакции на спам:
   - `delete`: удалить сообщение и заблокировать пользователя;
   - `notify_admin`: уведомить администратора.
@@ -32,7 +33,7 @@ Telegram bot container
 Redis container
 
 Spam flow:
-message -> stop words -> LLM check -> delete / notify admin -> log
+message -> duplicate flood check -> stop words -> LLM check -> delete / notify admin -> log
 ```
 
 Для v1 используется long polling: приложению не нужен публичный HTTP-порт, домен или TLS. Redis работает только во внутренней Docker Compose-сети и не публикуется наружу.
@@ -72,6 +73,8 @@ PostgreSQL, Alembic, `app/database/` and `migrations/` are intentionally not inc
 
 - `verify:{chat_id}:{user_id}` - pending verification с TTL, id приватного challenge-сообщения, `verification_chat_id`, `message_thread_id` для legacy-записей и временем создания;
 - `verified:{chat_id}:{user_id}` - отметка, что пользователь прошел верификацию;
+- `duplicate_message:{chat_id}:{user_id}` - текущая серия одинаковых сообщений пользователя с TTL;
+- `duplicate_message_warning:{chat_id}:{user_id}` - digest flood-сообщения, за которое пользователь уже получил предупреждение;
 - `llm:{sha256}` - кеш ответа LLM на нормализованный текст сообщения.
 
 При старте приложение выполняет `PING` Redis и восстанавливает таймеры для активных `verify:*` ключей. Если ключ поврежден или не имеет TTL, он безопасно удаляется и событие пишется в лог. Восстановленный timeout для join request отклоняет заявку и банит пользователя.
@@ -84,7 +87,7 @@ PostgreSQL, Alembic, `app/database/` and `migrations/` are intentionally not inc
 
 После нажатия кнопки бот вызывает `approve_chat_join_request`, удаляет приватное challenge-сообщение, отправляет личное `✅ Готово, доступ открыт`, отмечает пользователя как verified и очищает pending-запись. Если timeout истек, бот отправляет личное `❌ Проверка не пройдена`, вызывает `decline_chat_join_request`, `ban_chat_member` и удаляет pending-запись.
 
-LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. LLM вызывается только после совпадения stop-word. Ответы `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе применяется fallback на результат stop-word проверки.
+LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. В обычном spam-flow LLM вызывается только после совпадения stop-word. Отдельно бот отслеживает одинаковые сообщения подряд: при достижении `DUPLICATE_MESSAGE_WARN_THRESHOLD` LLM получает контекст flood-поведения, бот удаляет накопленные дубли и предупреждает пользователя, а следующий такой же повтор в течение `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` приводит к kick через ban/unban. Ответы `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе обычный stop-word flow применяет fallback на ключевые слова, а flood-flow не удаляет сообщение без подтверждения LLM.
 
 ## Словари stop-words
 
@@ -135,6 +138,9 @@ BOT_TOKEN=...
 TELEGRAM_PROXY_URL=
 REDIS_URL=redis://redis:6379/0
 VERIFY_TIMEOUT_SECONDS=180
+DUPLICATE_MESSAGE_WINDOW_SECONDS=60
+DUPLICATE_MESSAGE_WARN_THRESHOLD=3
+DUPLICATE_MESSAGE_WARNING_TTL_SECONDS=300
 ACTION_MODE=notify_admin
 ADMIN_USERNAME=@admin
 ADMIN_ID=
@@ -151,6 +157,9 @@ LOG_FILE=/app/logs/spam.log
 - `BOT_TOKEN` - токен Telegram-бота из BotFather.
 - `REDIS_URL` - адрес Redis внутри Compose-сети.
 - `VERIFY_TIMEOUT_SECONDS` - время ожидания верификации нового пользователя.
+- `DUPLICATE_MESSAGE_WINDOW_SECONDS` - окно, в котором считаются одинаковые сообщения подряд от одного пользователя.
+- `DUPLICATE_MESSAGE_WARN_THRESHOLD` - сколько одинаковых сообщений подряд нужно для LLM-проверки и предупреждения.
+- `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` - сколько действует предупреждение перед kick при новом таком же повторе.
 - `ACTION_MODE` - реакция на спам: `delete` или `notify_admin`.
 - `ADMIN_USERNAME` / `ADMIN_ID` - fallback-получатель уведомлений для `notify_admin`.
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` - параметры OpenAI-compatible LLM provider.

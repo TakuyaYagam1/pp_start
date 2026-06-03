@@ -21,6 +21,7 @@ class ModerationAction(str, Enum):
     DELETE_MESSAGE = "delete_message"
     NOTIFY_ADMIN = "notify_admin"
     BAN_UNBAN = "ban_unban"
+    WARN_USER = "warn_user"
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,25 @@ class PendingVerification:
                 if data.get("verification_chat_id") is None
                 else int(data["verification_chat_id"])
             ),
+        )
+
+
+@dataclass(frozen=True)
+class DuplicateMessageState:
+    user_id: int
+    chat_id: int
+    digest: str
+    normalized_text: str
+    message_ids: tuple[int, ...]
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> DuplicateMessageState:
+        return cls(
+            user_id=int(data["user_id"]),
+            chat_id=int(data["chat_id"]),
+            digest=str(data["digest"]),
+            normalized_text=str(data["normalized_text"]),
+            message_ids=tuple(int(message_id) for message_id in data["message_ids"]),
         )
 
 

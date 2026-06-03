@@ -20,6 +20,7 @@ from aiogram.types import (
 
 from app.cache.redis import (
     BlacklistRepository,
+    DuplicateMessageRepository,
     LLMResultCacheRepository,
     PendingVerificationRepository,
     RuntimeSettingsRepository,
@@ -31,7 +32,7 @@ from app.core.llm.client import LLMClient
 from app.core.services.moderation import ModerationService
 from app.core.services.spam_detector import SpamDetectorService
 from app.core.services.verification import schedule_join_request_timeout
-from app.logging import configure_logging, get_logger, log_app_event
+from app.observability.logging import configure_logging, get_logger, log_app_event
 from app.tg_bot.handlers import (
     admin_router,
     user_router,
@@ -280,6 +281,11 @@ def create_application(
     verified_user_repository = VerifiedUserRepository(redis)
     blacklist_repository = BlacklistRepository(redis)
     runtime_settings_repository = RuntimeSettingsRepository(redis)
+    duplicate_message_repository = DuplicateMessageRepository(
+        redis,
+        ttl_seconds=resolved_settings.duplicate_message_window_seconds,
+        warning_ttl_seconds=resolved_settings.duplicate_message_warning_ttl_seconds,
+    )
     llm_cache_repository = LLMResultCacheRepository(redis)
     llm_client = LLMClient.from_settings(resolved_settings)
     spam_detector_service = SpamDetectorService(
@@ -300,6 +306,7 @@ def create_application(
             "verified_user_repository": verified_user_repository,
             "blacklist_repository": blacklist_repository,
             "runtime_settings_repository": runtime_settings_repository,
+            "duplicate_message_repository": duplicate_message_repository,
             "llm_client": llm_client,
             "llm_cache_repository": llm_cache_repository,
             "spam_detector_service": spam_detector_service,

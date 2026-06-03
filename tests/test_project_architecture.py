@@ -16,6 +16,7 @@ from app.cache.redis import PendingVerificationRepository, RuntimeSettingsReposi
 from app.config import Settings
 from app.core.llm.client import LLMClient
 from app.core.models import ActionMode
+from app.observability.logging import configure_logging
 from app.tg_bot.handlers import admin_router, user_router
 from app.tg_bot.handlers.moderation import router as moderation_router
 from app.tg_bot.handlers.verification import router as verification_router
@@ -29,6 +30,7 @@ def test_clean_architecture_import_paths_are_available() -> None:
     assert PendingVerificationRepository.__name__ == "PendingVerificationRepository"
     assert RuntimeSettingsRepository.__name__ == "RuntimeSettingsRepository"
     assert LLMClient.__name__ == "LLMClient"
+    assert configure_logging.__name__ == "configure_logging"
     assert admin_router.name == "admin"
     assert user_router.name == "user"
     assert moderation_router.name == "moderation"
@@ -58,6 +60,7 @@ def test_project_files_match_clean_architecture() -> None:
         "app/core/data/stopwords/spam_ru.txt",
         "app/core/data/stopwords/spam_en.txt",
         "app/cache/redis.py",
+        "app/observability/logging.py",
         "app/tg_bot/handlers/admin.py",
         "app/tg_bot/handlers/user.py",
         "app/tg_bot/keyboards/reply.py",
@@ -73,6 +76,7 @@ def test_no_relational_database_scaffold_for_redis_only_v1() -> None:
     assert not Path("app/database").exists()
     assert not Path("migrations").exists()
     assert not Path("app/main.py").exists()
+    assert not Path("app/logging.py").exists()
     assert not Path("requirements.txt").exists()
 
 

@@ -1,5 +1,6 @@
 from app.cache.redis import (
     BlacklistRepository,
+    DuplicateMessageRepository,
     LLMResultCacheRepository,
     PendingVerificationRepository,
     RedisClientLifecycle,
@@ -10,6 +11,7 @@ from app.cache.redis import (
 
 __all__ = (
     "BlacklistRepository",
+    "DuplicateMessageRepository",
     "LLMResultCacheRepository",
     "PendingVerificationRepository",
     "RedisClientLifecycle",

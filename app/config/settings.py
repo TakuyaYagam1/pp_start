@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     telegram_proxy_url: str | None = None
     redis_url: str
     verify_timeout_seconds: int = Field(gt=0)
+    duplicate_message_window_seconds: int = Field(default=60, gt=0)
+    duplicate_message_warn_threshold: int = Field(default=3, gt=1)
+    duplicate_message_warning_ttl_seconds: int = Field(default=300, gt=0)
     action_mode: ActionMode
     admin_username: str | None = None
     admin_id: int | None = None

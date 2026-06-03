@@ -8,7 +8,7 @@ from typing import Any
 from app.config import Settings
 from app.cache.redis import BlacklistRepository
 from app.core.models import ModerationAction, SpamDetectionResult
-from app.logging import get_logger, log_spam_event
+from app.observability.logging import get_logger, log_spam_event
 from app.tg_bot.utils.telegram_api import call_telegram_api
 
 
@@ -134,6 +134,106 @@ class ModerationService:
         )
         return replace(spam_result, moderation_action=ModerationAction.DELETE_MESSAGE)
 
+    async def warn_duplicate_flood(
+        self,
+        *,
+        bot: Any,
+        message: Any,
+        spam_result: SpamDetectionResult,
+        duplicate_message_ids: tuple[int, ...],
+        logger: logging.Logger | None = None,
+    ) -> SpamDetectionResult:
+        chat_id = int(message.chat.id)
+        user_id = int(message.from_user.id)
+        message_text = str(getattr(message, "text", "") or "")
+        event_logger = logger or get_logger("app")
+
+        await _delete_messages(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            message_ids=duplicate_message_ids,
+            logger=event_logger,
+        )
+        await _send_duplicate_warning(
+            bot=bot,
+            message=message,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            logger=event_logger,
+        )
+
+        log_spam_event(
+            event_logger,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            action=ModerationAction.WARN_USER.value,
+            details=(
+                f"reason={spam_result.reason}; "
+                f"llm_decision={spam_result.llm_decision.value}; "
+                f"matched_term={spam_result.matched_term or '-'}; "
+                f"deleted_messages={len(duplicate_message_ids)}"
+            ),
+        )
+        return replace(spam_result, moderation_action=ModerationAction.WARN_USER)
+
+    async def kick_duplicate_flood(
+        self,
+        *,
+        bot: Any,
+        message: Any,
+        spam_result: SpamDetectionResult,
+        duplicate_message_ids: tuple[int, ...],
+        logger: logging.Logger | None = None,
+    ) -> SpamDetectionResult:
+        chat_id = int(message.chat.id)
+        user_id = int(message.from_user.id)
+        message_text = str(getattr(message, "text", "") or "")
+        event_logger = logger or get_logger("app")
+
+        await _delete_messages(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            message_ids=duplicate_message_ids,
+            logger=event_logger,
+        )
+        await call_telegram_api(
+            operation=ModerationAction.BAN_UNBAN.value,
+            call=bot.ban_chat_member(chat_id=chat_id, user_id=user_id),
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            logger=event_logger,
+        )
+        await call_telegram_api(
+            operation=ModerationAction.BAN_UNBAN.value,
+            call=bot.unban_chat_member(chat_id=chat_id, user_id=user_id),
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            logger=event_logger,
+        )
+
+        log_spam_event(
+            event_logger,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_text=message_text,
+            action=ModerationAction.BAN_UNBAN.value,
+            details=(
+                f"reason={spam_result.reason}; "
+                f"llm_decision={spam_result.llm_decision.value}; "
+                f"matched_term={spam_result.matched_term or '-'}; "
+                f"deleted_messages={len(duplicate_message_ids)}"
+            ),
+        )
+        return replace(spam_result, moderation_action=ModerationAction.BAN_UNBAN)
+
 
 async def _send_admin_notification(
     *,
@@ -158,6 +258,59 @@ async def _send_admin_notification(
 
     await call_telegram_api(
         operation=ModerationAction.NOTIFY_ADMIN.value,
+        call=bot.send_message(**send_kwargs),
+        chat_id=chat_id,
+        user_id=user_id,
+        message_text=message_text,
+        logger=logger,
+    )
+
+
+async def _delete_messages(
+    *,
+    bot: Any,
+    chat_id: int,
+    user_id: int,
+    message_text: str,
+    message_ids: tuple[int, ...],
+    logger: logging.Logger,
+) -> None:
+    for message_id in dict.fromkeys(message_ids):
+        try:
+            await call_telegram_api(
+                operation=ModerationAction.DELETE_MESSAGE.value,
+                call=bot.delete_message(chat_id=chat_id, message_id=int(message_id)),
+                chat_id=chat_id,
+                user_id=user_id,
+                message_text=message_text,
+                logger=logger,
+            )
+        except Exception:
+            continue
+
+
+async def _send_duplicate_warning(
+    *,
+    bot: Any,
+    message: Any,
+    chat_id: int,
+    user_id: int,
+    message_text: str,
+    logger: logging.Logger,
+) -> None:
+    send_kwargs: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": (
+            "⚠️ Обнаружены одинаковые сообщения подряд. "
+            "Повторный flood приведет к исключению из группы."
+        ),
+    }
+    message_thread_id = getattr(message, "message_thread_id", None)
+    if message_thread_id is not None:
+        send_kwargs["message_thread_id"] = int(message_thread_id)
+
+    await call_telegram_api(
+        operation=ModerationAction.WARN_USER.value,
         call=bot.send_message(**send_kwargs),
         chat_id=chat_id,
         user_id=user_id,

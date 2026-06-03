@@ -18,7 +18,7 @@ from app.cache.redis import (
     PendingVerificationRepository,
     VerifiedUserRepository,
 )
-from app.logging import get_logger, log_app_event
+from app.observability.logging import get_logger, log_app_event
 from app.tg_bot.utils.telegram_api import call_telegram_api
 
 

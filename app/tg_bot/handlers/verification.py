@@ -18,7 +18,7 @@ from app.core.services.verification import (
     start_join_request_verification,
     start_member_verification,
 )
-from app.logging import get_logger
+from app.observability.logging import get_logger
 
 
 router = Router(name="verification")

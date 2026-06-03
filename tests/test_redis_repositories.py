@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from app.cache.redis import (
     BlacklistRepository,
+    DuplicateMessageRepository,
     PendingVerificationRepository,
     RuntimeSettingsRepository,
     VerifiedUserRepository,
@@ -117,6 +118,67 @@ def test_blacklist_repository_adds_and_reads_key_without_ttl() -> None:
         assert "blacklist:-100123:42" not in redis.expirations
         assert await repository.contains(chat_id=-100123, user_id=42) is True
         assert await repository.contains(chat_id=-100123, user_id=43) is False
+
+    asyncio.run(run())
+
+
+def test_duplicate_message_repository_counts_same_text_and_resets_on_change() -> None:
+    async def run() -> None:
+        redis = FakeRedis()
+        repository = DuplicateMessageRepository(
+            redis,
+            ttl_seconds=60,
+            warning_ttl_seconds=300,
+        )
+
+        first = await repository.record_message(
+            chat_id=-100123,
+            user_id=42,
+            message_id=1,
+            message_text="Привет   Мир",
+        )
+        second = await repository.record_message(
+            chat_id=-100123,
+            user_id=42,
+            message_id=2,
+            message_text="привет мир",
+        )
+        changed = await repository.record_message(
+            chat_id=-100123,
+            user_id=42,
+            message_id=3,
+            message_text="другой текст",
+        )
+
+        assert first.message_ids == (1,)
+        assert second.message_ids == (1, 2)
+        assert changed.message_ids == (3,)
+        assert redis.expirations["duplicate_message:-100123:42"] == 60
+
+    asyncio.run(run())
+
+
+def test_duplicate_message_repository_marks_and_clears_warning_digest() -> None:
+    async def run() -> None:
+        redis = FakeRedis()
+        repository = DuplicateMessageRepository(
+            redis,
+            ttl_seconds=60,
+            warning_ttl_seconds=300,
+        )
+
+        await repository.mark_warned(
+            chat_id=-100123,
+            user_id=42,
+            digest="abc",
+        )
+
+        assert await repository.get_warning_digest(chat_id=-100123, user_id=42) == "abc"
+        assert redis.expirations["duplicate_message_warning:-100123:42"] == 300
+
+        await repository.clear_warning(chat_id=-100123, user_id=42)
+
+        assert await repository.get_warning_digest(chat_id=-100123, user_id=42) is None
 
     asyncio.run(run())
 

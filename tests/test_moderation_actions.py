@@ -10,12 +10,13 @@ from pydantic import SecretStr
 from app.config import Settings
 from app.core.models import (
     ActionMode,
+    DuplicateMessageState,
     LLMDecision,
     ModerationAction,
     SpamDetectionResult,
     StopWordCheckResult,
 )
-from app.logging import close_logger_handlers, configure_logging
+from app.observability.logging import close_logger_handlers, configure_logging
 from app.core.services.moderation import ModerationService
 from app.tg_bot.handlers.moderation import handle_text_message
 
@@ -68,6 +69,63 @@ class FakeSpamDetectorService:
         return _spam_result()
 
 
+@dataclass
+class FakeFloodSpamDetectorService:
+    duplicate_result: SpamDetectionResult
+    duplicate_calls: list[tuple[str, int]] = field(default_factory=list)
+    detect_calls: list[str] = field(default_factory=list)
+
+    async def detect(self, message_text: str) -> SpamDetectionResult:
+        self.detect_calls.append(message_text)
+        return SpamDetectionResult(is_spam=False, reason="no_stop_word")
+
+    async def detect_duplicate_flood(
+        self,
+        message_text: str,
+        *,
+        duplicate_count: int,
+    ) -> SpamDetectionResult:
+        self.duplicate_calls.append((message_text, duplicate_count))
+        return self.duplicate_result
+
+
+@dataclass
+class FakeDuplicateMessageRepository:
+    state: DuplicateMessageState
+    warning_digest: str | None = None
+    marked_warning_digest: str | None = None
+    cleared: bool = False
+    warning_cleared: bool = False
+
+    async def record_message(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        message_id: int,
+        message_text: str,
+    ) -> DuplicateMessageState:
+        return self.state
+
+    async def get_warning_digest(self, *, chat_id: int, user_id: int) -> str | None:
+        return self.warning_digest
+
+    async def mark_warned(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        digest: str,
+    ) -> None:
+        self.marked_warning_digest = digest
+
+    async def clear(self, *, chat_id: int, user_id: int) -> None:
+        self.cleared = True
+
+    async def clear_warning(self, *, chat_id: int, user_id: int) -> None:
+        self.warning_cleared = True
+
+
 def _settings(*, action_mode: str, log_file: Path) -> Settings:
     return Settings(
         bot_token=SecretStr("123456:test-token"),
@@ -85,10 +143,15 @@ def _settings(*, action_mode: str, log_file: Path) -> Settings:
     )
 
 
-def _message(*, message_thread_id: int | None = None) -> SimpleNamespace:
+def _message(
+    *,
+    message_thread_id: int | None = None,
+    message_id: int = 55,
+    text: str = "казино прямо сейчас",
+) -> SimpleNamespace:
     return SimpleNamespace(
-        text="казино прямо сейчас",
-        message_id=55,
+        text=text,
+        message_id=message_id,
         message_thread_id=message_thread_id,
         chat=SimpleNamespace(id=-100123, type="supergroup", username="public_group"),
         from_user=SimpleNamespace(id=42, is_bot=False, username="spammer"),
@@ -102,6 +165,16 @@ def _spam_result() -> SpamDetectionResult:
         stop_word=StopWordCheckResult(matched=True, matched_term="казино"),
         llm_decision=LLMDecision.SPAM,
         matched_term="казино",
+    )
+
+
+def _duplicate_spam_result() -> SpamDetectionResult:
+    return SpamDetectionResult(
+        is_spam=True,
+        reason="llm_duplicate_flood_spam",
+        stop_word=StopWordCheckResult(matched=False),
+        llm_decision=LLMDecision.SPAM,
+        matched_term="duplicate_message",
     )
 
 
@@ -281,5 +354,113 @@ def test_text_moderation_uses_runtime_action_mode_over_env_default(
         assert bot.deleted_messages == [{"chat_id": -100123, "message_id": 55}]
         assert bot.sent_messages == []
         assert blacklist_repository.added == []
+
+    asyncio.run(run())
+
+
+def test_duplicate_flood_deletes_duplicates_and_warns_user(tmp_path: Path) -> None:
+    async def run() -> None:
+        log_file = tmp_path / "spam.log"
+        settings = _settings(action_mode="notify_admin", log_file=log_file)
+        bot = FakeBot()
+        duplicate_repository = FakeDuplicateMessageRepository(
+            state=DuplicateMessageState(
+                chat_id=-100123,
+                user_id=42,
+                digest="same-digest",
+                normalized_text="hello",
+                message_ids=(11, 12, 13),
+            )
+        )
+        spam_detector = FakeFloodSpamDetectorService(
+            duplicate_result=_duplicate_spam_result()
+        )
+
+        result = await handle_text_message(
+            message=_message(
+                message_thread_id=777,
+                message_id=13,
+                text="hello",
+            ),
+            spam_detector_service=spam_detector,
+            blacklist_repository=FakeBlacklistRepository(),
+            settings=settings,
+            moderation_service=ModerationService(),
+            runtime_settings_repository=FakeRuntimeSettingsRepository(
+                action_mode=ActionMode.NOTIFY_ADMIN
+            ),
+            duplicate_message_repository=duplicate_repository,
+            bot=bot,
+        )
+
+        assert result is not None
+        assert result.moderation_action == ModerationAction.WARN_USER
+        assert bot.deleted_messages == [
+            {"chat_id": -100123, "message_id": 11},
+            {"chat_id": -100123, "message_id": 12},
+            {"chat_id": -100123, "message_id": 13},
+        ]
+        assert bot.sent_messages == [
+            {
+                "chat_id": -100123,
+                "text": (
+                    "⚠️ Обнаружены одинаковые сообщения подряд. "
+                    "Повторный flood приведет к исключению из группы."
+                ),
+                "message_thread_id": 777,
+            }
+        ]
+        assert bot.bans == []
+        assert duplicate_repository.marked_warning_digest == "same-digest"
+        assert duplicate_repository.cleared is True
+        assert spam_detector.duplicate_calls == [("hello", 3)]
+        assert spam_detector.detect_calls == []
+
+    asyncio.run(run())
+
+
+def test_duplicate_flood_repeated_after_warning_kicks_user(tmp_path: Path) -> None:
+    async def run() -> None:
+        log_file = tmp_path / "spam.log"
+        settings = _settings(action_mode="notify_admin", log_file=log_file)
+        bot = FakeBot()
+        duplicate_repository = FakeDuplicateMessageRepository(
+            state=DuplicateMessageState(
+                chat_id=-100123,
+                user_id=42,
+                digest="same-digest",
+                normalized_text="hello",
+                message_ids=(14,),
+            ),
+            warning_digest="same-digest",
+        )
+        spam_detector = FakeFloodSpamDetectorService(
+            duplicate_result=_duplicate_spam_result()
+        )
+
+        result = await handle_text_message(
+            message=_message(message_id=14, text="hello"),
+            spam_detector_service=spam_detector,
+            blacklist_repository=FakeBlacklistRepository(),
+            settings=settings,
+            moderation_service=ModerationService(),
+            runtime_settings_repository=FakeRuntimeSettingsRepository(
+                action_mode=ActionMode.NOTIFY_ADMIN
+            ),
+            duplicate_message_repository=duplicate_repository,
+            bot=bot,
+        )
+
+        assert result is not None
+        assert result.moderation_action == ModerationAction.BAN_UNBAN
+        assert result.reason == "duplicate_flood_repeated_after_warning"
+        assert bot.deleted_messages == [{"chat_id": -100123, "message_id": 14}]
+        assert bot.bans == [{"chat_id": -100123, "user_id": 42}]
+        assert bot.unbans == [{"chat_id": -100123, "user_id": 42}]
+        assert bot.sent_messages == []
+        assert duplicate_repository.cleared is True
+        assert duplicate_repository.warning_cleared is True
+        assert spam_detector.duplicate_calls == []
+        assert spam_detector.detect_calls == []
 
     asyncio.run(run())

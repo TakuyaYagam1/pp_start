@@ -4,7 +4,7 @@ import logging
 from collections.abc import Awaitable
 from typing import TypeVar
 
-from app.logging import get_logger, log_app_event
+from app.observability.logging import get_logger, log_app_event
 
 
 T = TypeVar("T")

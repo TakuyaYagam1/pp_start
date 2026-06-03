@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 
-from app.core.models import ActionMode, PendingVerification
+from app.core.models import ActionMode, DuplicateMessageState, PendingVerification
 from redis.asyncio import Redis
 
 
@@ -16,6 +16,8 @@ MIN_LLM_CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_LLM_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 ACTION_MODE_KEY = "settings:action_mode"
 NOTIFICATION_TARGET_KEY_PREFIX = "settings:notification_target"
+DUPLICATE_MESSAGE_KEY_PREFIX = "duplicate_message"
+DUPLICATE_MESSAGE_WARNING_KEY_PREFIX = "duplicate_message_warning"
 
 
 def create_redis_client(redis_url: str) -> Redis:
@@ -167,6 +169,98 @@ class LLMResultCacheRepository:
         if ttl < 0:
             return None
         return ttl
+
+
+class DuplicateMessageRepository:
+    def __init__(
+        self,
+        redis: Redis,
+        *,
+        ttl_seconds: int,
+        warning_ttl_seconds: int,
+    ) -> None:
+        self._redis = redis
+        self._ttl_seconds = ttl_seconds
+        self._warning_ttl_seconds = warning_ttl_seconds
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        return " ".join(text.casefold().split())
+
+    @classmethod
+    def digest_text(cls, text: str) -> str:
+        normalized_text = cls.normalize_text(text)
+        return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def key(chat_id: int, user_id: int) -> str:
+        return f"{DUPLICATE_MESSAGE_KEY_PREFIX}:{chat_id}:{user_id}"
+
+    @staticmethod
+    def warning_key(chat_id: int, user_id: int) -> str:
+        return f"{DUPLICATE_MESSAGE_WARNING_KEY_PREFIX}:{chat_id}:{user_id}"
+
+    async def record_message(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        message_id: int,
+        message_text: str,
+    ) -> DuplicateMessageState:
+        normalized_text = self.normalize_text(message_text)
+        digest = self.digest_text(message_text)
+        previous = await self.get(chat_id=chat_id, user_id=user_id)
+        message_ids = (message_id,)
+        if previous is not None and previous.digest == digest:
+            message_ids = (*previous.message_ids, message_id)
+
+        state = DuplicateMessageState(
+            user_id=user_id,
+            chat_id=chat_id,
+            digest=digest,
+            normalized_text=normalized_text,
+            message_ids=message_ids,
+        )
+        await self._redis.set(
+            self.key(chat_id, user_id),
+            json.dumps(asdict(state), ensure_ascii=False),
+            ex=self._ttl_seconds,
+        )
+        return state
+
+    async def get(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+    ) -> DuplicateMessageState | None:
+        raw = await self._redis.get(self.key(chat_id, user_id))
+        if raw is None:
+            return None
+        return DuplicateMessageState.from_mapping(json.loads(raw))
+
+    async def clear(self, *, chat_id: int, user_id: int) -> None:
+        await self._redis.delete(self.key(chat_id, user_id))
+
+    async def get_warning_digest(self, *, chat_id: int, user_id: int) -> str | None:
+        return await self._redis.get(self.warning_key(chat_id, user_id))
+
+    async def mark_warned(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        digest: str,
+    ) -> None:
+        await self._redis.set(
+            self.warning_key(chat_id, user_id),
+            digest,
+            ex=self._warning_ttl_seconds,
+        )
+
+    async def clear_warning(self, *, chat_id: int, user_id: int) -> None:
+        await self._redis.delete(self.warning_key(chat_id, user_id))
 
 
 class RuntimeSettingsRepository:

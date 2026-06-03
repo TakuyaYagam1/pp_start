@@ -146,3 +146,63 @@ class SpamDetectorService:
             stop_word=stop_word,
             llm_answer=llm_answer,
         )
+
+    async def detect_duplicate_flood(
+        self,
+        message_text: str,
+        *,
+        duplicate_count: int,
+    ) -> SpamDetectionResult:
+        llm_message = build_duplicate_flood_llm_message(
+            message_text=message_text,
+            duplicate_count=duplicate_count,
+        )
+        try:
+            llm_answer = await self.ask_llm_with_cache(llm_message)
+        except Exception:
+            return SpamDetectionResult(
+                is_spam=False,
+                reason="llm_duplicate_flood_error",
+                stop_word=StopWordCheckResult(matched=False),
+                llm_decision=LLMDecision.UNKNOWN,
+                matched_term="duplicate_message",
+            )
+
+        llm_decision = parse_llm_decision(llm_answer)
+        if llm_decision == LLMDecision.SPAM:
+            return SpamDetectionResult(
+                is_spam=True,
+                reason="llm_duplicate_flood_spam",
+                stop_word=StopWordCheckResult(matched=False),
+                llm_decision=llm_decision,
+                matched_term="duplicate_message",
+            )
+        if llm_decision == LLMDecision.NOT_SPAM:
+            return SpamDetectionResult(
+                is_spam=False,
+                reason="llm_duplicate_flood_not_spam",
+                stop_word=StopWordCheckResult(matched=False),
+                llm_decision=llm_decision,
+                matched_term="duplicate_message",
+            )
+
+        return SpamDetectionResult(
+            is_spam=False,
+            reason="llm_duplicate_flood_unknown",
+            stop_word=StopWordCheckResult(matched=False),
+            llm_decision=llm_decision,
+            matched_term="duplicate_message",
+        )
+
+
+def build_duplicate_flood_llm_message(
+    *,
+    message_text: str,
+    duplicate_count: int,
+) -> str:
+    return (
+        "Пользователь отправил одно и то же сообщение "
+        f"{duplicate_count} раз подряд в групповом чате. "
+        "Это flood/spam или подозрительное поведение? "
+        f"Текст повторяющегося сообщения: {message_text}"
+    )
