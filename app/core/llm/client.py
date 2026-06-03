@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.core.llm.prompts import build_spam_detection_prompt
 
 
 class LLMClientError(RuntimeError):
@@ -43,11 +44,7 @@ class LLMClient:
             "messages": [
                 {
                     "role": "user",
-                    "content": (
-                        "Является ли следующее сообщение спамом или вредоносным? "
-                        'Ответь только "да" или "нет". '
-                        f"Сообщение: {message_text}"
-                    ),
+                    "content": build_spam_detection_prompt(message_text),
                 }
             ],
             "temperature": 0,

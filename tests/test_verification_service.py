@@ -14,6 +14,7 @@ from app.core.services.verification import (
     VERIFY_BUTTON_TEXT,
     VERIFY_SUCCESS_CALLBACK_ANSWER,
     VERIFY_SUCCESS_PRIVATE_MESSAGE,
+    VerificationTaskRegistries,
     block_unverified_join_request_after_timeout,
     build_verification_message,
     build_verification_timeout_message,
@@ -117,6 +118,24 @@ def test_verification_message_uses_clear_emoji_statuses() -> None:
     assert message.reply_markup.inline_keyboard[0][0].text == "✅ Я человек"
     assert "⏳ Осталось: 3:00" in message.text
     assert build_verification_timeout_message(timeout_seconds=180).startswith("❌")
+
+
+def test_verification_task_registries_cancel_all_tasks() -> None:
+    async def run() -> None:
+        registries = VerificationTaskRegistries()
+        timeout_task = asyncio.create_task(_sleep_forever())
+        countdown_task = asyncio.create_task(_sleep_forever())
+        registries.timeout_tasks[(-100123, 42)] = timeout_task
+        registries.countdown_tasks[(-100123, 42)] = countdown_task
+
+        await registries.cancel_all()
+
+        assert registries.timeout_tasks == {}
+        assert registries.countdown_tasks == {}
+        assert timeout_task.cancelled()
+        assert countdown_task.cancelled()
+
+    asyncio.run(run())
 
 
 def test_complete_verification_from_callback_marks_verified_and_cleans_pending() -> (

@@ -135,19 +135,19 @@ def test_duplicate_message_repository_counts_same_text_and_resets_on_change() ->
             chat_id=-100123,
             user_id=42,
             message_id=1,
-            message_text="Привет   Мир",
+            content_key="text:Привет   Мир",
         )
         second = await repository.record_message(
             chat_id=-100123,
             user_id=42,
             message_id=2,
-            message_text="привет мир",
+            content_key="text:привет мир",
         )
         changed = await repository.record_message(
             chat_id=-100123,
             user_id=42,
             message_id=3,
-            message_text="другой текст",
+            content_key="text:другой текст",
         )
 
         assert first.message_ids == (1,)
@@ -206,6 +206,43 @@ def test_runtime_settings_repository_reads_writes_and_resets_action_mode() -> No
         assert "settings:action_mode" not in redis.values
         assert (
             await repository.get_action_mode(default=ActionMode.NOTIFY_ADMIN)
+            == ActionMode.NOTIFY_ADMIN
+        )
+
+    asyncio.run(run())
+
+
+def test_runtime_settings_repository_scopes_action_mode_by_chat() -> None:
+    async def run() -> None:
+        redis = FakeRedis(values={"settings:action_mode": "notify_admin"})
+        repository = RuntimeSettingsRepository(redis)
+
+        await repository.set_action_mode(ActionMode.DELETE, chat_id=-100123)
+
+        assert redis.values["settings:action_mode:-100123"] == "delete"
+        assert (
+            await repository.get_action_mode(
+                default=ActionMode.NOTIFY_ADMIN,
+                chat_id=-100123,
+            )
+            == ActionMode.DELETE
+        )
+        assert (
+            await repository.get_action_mode(
+                default=ActionMode.DELETE,
+                chat_id=-100456,
+            )
+            == ActionMode.NOTIFY_ADMIN
+        )
+
+        await repository.reset_action_mode(chat_id=-100123)
+
+        assert "settings:action_mode:-100123" not in redis.values
+        assert (
+            await repository.get_action_mode(
+                default=ActionMode.DELETE,
+                chat_id=-100123,
+            )
             == ActionMode.NOTIFY_ADMIN
         )
 

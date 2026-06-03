@@ -321,7 +321,8 @@ async def handle_action_mode_command(
     argument = parse_action_mode_argument(getattr(message, "text", None))
     if argument is None:
         current_mode = await runtime_settings_repository.get_action_mode(
-            default=settings.action_mode
+            default=settings.action_mode,
+            chat_id=chat_id,
         )
         notification_target = await _current_notification_target(
             message=message,
@@ -344,7 +345,7 @@ async def handle_action_mode_command(
         return current_mode
 
     if argument in ACTION_MODE_RESET_ALIASES:
-        await runtime_settings_repository.reset_action_mode()
+        await runtime_settings_repository.reset_action_mode(chat_id=chat_id)
         await _send_admin_response(
             message=message,
             bot=bot,
@@ -365,7 +366,7 @@ async def handle_action_mode_command(
         )
         return None
 
-    await runtime_settings_repository.set_action_mode(action_mode)
+    await runtime_settings_repository.set_action_mode(action_mode, chat_id=chat_id)
     await _send_admin_response(
         message=message,
         bot=bot,
@@ -399,7 +400,8 @@ async def handle_admin_panel_command(
 
     chat_id = _chat_id(message)
     current_mode = await runtime_settings_repository.get_action_mode(
-        default=settings.action_mode
+        default=settings.action_mode,
+        chat_id=chat_id,
     )
     notification_target = await _current_notification_target(
         message=message,
@@ -528,7 +530,7 @@ async def handle_action_mode_callback(
         return None
 
     if argument in ACTION_MODE_RESET_ALIASES:
-        await runtime_settings_repository.reset_action_mode()
+        await runtime_settings_repository.reset_action_mode(chat_id=chat_id)
         current_mode = settings.action_mode
         answer_text = f"✅ Активен режим из env: {current_mode.value}"
     else:
@@ -537,7 +539,7 @@ async def handle_action_mode_callback(
             await callback_query.answer(text="❌ Неверный режим", show_alert=True)
             return None
 
-        await runtime_settings_repository.set_action_mode(action_mode)
+        await runtime_settings_repository.set_action_mode(action_mode, chat_id=chat_id)
         current_mode = action_mode
         answer_text = f"✅ Режим изменен: {current_mode.value}"
 

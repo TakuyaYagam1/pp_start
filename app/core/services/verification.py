@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from aiogram.types import (
@@ -49,6 +49,30 @@ VERIFIED_MEMBER_PERMISSIONS = ChatPermissions(
 class VerificationMessage:
     text: str
     reply_markup: InlineKeyboardMarkup
+
+
+@dataclass
+class VerificationTaskRegistries:
+    timeout_tasks: dict[tuple[int, int], asyncio.Task[bool]] = field(
+        default_factory=dict
+    )
+    countdown_tasks: dict[tuple[int, int], asyncio.Task[bool]] = field(
+        default_factory=dict
+    )
+
+    async def cancel_all(self) -> None:
+        tasks = {
+            task
+            for registry in (self.timeout_tasks, self.countdown_tasks)
+            for task in registry.values()
+        }
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.timeout_tasks.clear()
+        self.countdown_tasks.clear()
 
 
 @dataclass(frozen=True)

@@ -31,13 +31,12 @@ from app.config import Settings
 from app.core.llm.client import LLMClient
 from app.core.services.moderation import ModerationService
 from app.core.services.spam_detector import SpamDetectorService
-from app.core.services.verification import schedule_join_request_timeout
-from app.observability.logging import configure_logging, get_logger, log_app_event
-from app.tg_bot.handlers import (
-    admin_router,
-    user_router,
-    verification_timeout_tasks,
+from app.core.services.verification import (
+    VerificationTaskRegistries,
+    schedule_join_request_timeout,
 )
+from app.observability.logging import configure_logging, get_logger, log_app_event
+from app.tg_bot.handlers import admin_router, user_router
 from app.tg_bot.middlewares import RedisMiddleware
 
 
@@ -62,6 +61,7 @@ class BotApplication:
     dispatcher: Dispatcher
     redis_client: Any
     settings: Settings
+    verification_task_registries: VerificationTaskRegistries
     allowed_updates: tuple[str, ...] = ALLOWED_UPDATES
 
 
@@ -131,6 +131,7 @@ async def restore_pending_verification_timers(
     bot: Any,
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
+    verification_task_registries: VerificationTaskRegistries,
     settings: Settings,
     logger: logging.Logger | None = None,
 ) -> int:
@@ -202,7 +203,7 @@ async def restore_pending_verification_timers(
             timeout_seconds=_restored_timer_delay(
                 min(ttl, settings.verify_timeout_seconds)
             ),
-            task_registry=verification_timeout_tasks,
+            task_registry=verification_task_registries.timeout_tasks,
             logger=event_logger,
         )
         restored += 1
@@ -230,6 +231,7 @@ async def on_startup(
     redis_client: Any,
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
+    verification_task_registries: VerificationTaskRegistries,
     settings: Settings,
     logger: logging.Logger | None = None,
     **_: Any,
@@ -241,12 +243,20 @@ async def on_startup(
         bot=bot,
         pending_verification_repository=pending_verification_repository,
         blacklist_repository=blacklist_repository,
+        verification_task_registries=verification_task_registries,
         settings=settings,
         logger=logger,
     )
 
 
-async def on_shutdown(*, bot: Any, redis_client: Any, **_: Any) -> None:
+async def on_shutdown(
+    *,
+    bot: Any,
+    redis_client: Any,
+    verification_task_registries: VerificationTaskRegistries,
+    **_: Any,
+) -> None:
+    await verification_task_registries.cancel_all()
     await bot.session.close()
     try:
         await redis_client.aclose(close_connection_pool=True)
@@ -293,6 +303,7 @@ def create_application(
         llm_cache_repository=llm_cache_repository,
     )
     moderation_service = ModerationService()
+    verification_task_registries = VerificationTaskRegistries()
 
     dispatcher.update.outer_middleware(RedisMiddleware(redis))
     include_application_router(dispatcher, admin_router)
@@ -311,6 +322,7 @@ def create_application(
             "llm_cache_repository": llm_cache_repository,
             "spam_detector_service": spam_detector_service,
             "moderation_service": moderation_service,
+            "verification_task_registries": verification_task_registries,
         }
     )
     dispatcher.startup.register(on_startup)
@@ -321,6 +333,7 @@ def create_application(
         dispatcher=dispatcher,
         redis_client=redis,
         settings=resolved_settings,
+        verification_task_registries=verification_task_registries,
     )
 
 

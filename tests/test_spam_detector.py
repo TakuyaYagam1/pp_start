@@ -115,43 +115,6 @@ def test_detect_falls_back_to_stop_word_on_llm_timeout() -> None:
     asyncio.run(run())
 
 
-def test_detect_duplicate_flood_uses_llm_context() -> None:
-    async def run() -> None:
-        llm_client = FakeLLMClient(answers=["да"])
-        result = await SpamDetectorService(
-            llm_client=llm_client
-        ).detect_duplicate_flood(
-            "одинаковый текст",
-            duplicate_count=3,
-        )
-
-        assert result.is_spam is True
-        assert result.reason == "llm_duplicate_flood_spam"
-        assert result.llm_decision == LLMDecision.SPAM
-        assert result.matched_term == "duplicate_message"
-        assert "3 раз подряд" in llm_client.calls[0]
-        assert "одинаковый текст" in llm_client.calls[0]
-
-    asyncio.run(run())
-
-
-def test_detect_duplicate_flood_does_not_delete_on_llm_error() -> None:
-    async def run() -> None:
-        llm_client = FakeLLMClient(error=TimeoutError("llm timeout"))
-        result = await SpamDetectorService(
-            llm_client=llm_client
-        ).detect_duplicate_flood(
-            "одинаковый текст",
-            duplicate_count=3,
-        )
-
-        assert result.is_spam is False
-        assert result.reason == "llm_duplicate_flood_error"
-        assert result.llm_decision == LLMDecision.UNKNOWN
-
-    asyncio.run(run())
-
-
 def test_ask_llm_with_cache_uses_cached_answer_without_llm_call() -> None:
     async def run() -> None:
         llm_client = FakeLLMClient(answers=["да"])

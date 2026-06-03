@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from aiogram import F, Router
@@ -14,6 +13,7 @@ from app.cache.redis import (
 from app.config import Settings
 from app.core.services.verification import (
     VERIFY_CALLBACK_PREFIX,
+    VerificationTaskRegistries,
     complete_verification_from_callback,
     start_join_request_verification,
     start_member_verification,
@@ -22,8 +22,6 @@ from app.observability.logging import get_logger
 
 
 router = Router(name="verification")
-verification_timeout_tasks: dict[tuple[int, int], asyncio.Task[bool]] = {}
-verification_countdown_tasks: dict[tuple[int, int], asyncio.Task[bool]] = {}
 JOINED_MEMBER_STATUSES = {"member", "restricted"}
 PRE_JOIN_STATUSES = {"left", "kicked"}
 
@@ -46,6 +44,7 @@ async def handle_chat_join_request(
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
     settings: Settings,
+    verification_task_registries: VerificationTaskRegistries,
 ) -> bool:
     user = join_request.from_user
     return await start_join_request_verification(
@@ -57,8 +56,8 @@ async def handle_chat_join_request(
         user_chat_id=join_request.user_chat_id,
         user_full_name=user.full_name,
         timeout_seconds=settings.verify_timeout_seconds,
-        task_registry=verification_timeout_tasks,
-        countdown_task_registry=verification_countdown_tasks,
+        task_registry=verification_task_registries.timeout_tasks,
+        countdown_task_registry=verification_task_registries.countdown_tasks,
         logger=get_logger("app"),
     )
 
@@ -69,6 +68,7 @@ async def on_chat_join_request(
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
     settings: Settings,
+    verification_task_registries: VerificationTaskRegistries,
 ) -> None:
     await handle_chat_join_request(
         join_request=join_request,
@@ -76,6 +76,7 @@ async def on_chat_join_request(
         pending_verification_repository=pending_verification_repository,
         blacklist_repository=blacklist_repository,
         settings=settings,
+        verification_task_registries=verification_task_registries,
     )
 
 
@@ -89,6 +90,7 @@ async def handle_chat_member_update(
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
     settings: Settings,
+    verification_task_registries: VerificationTaskRegistries,
 ) -> bool:
     if not _joined_from_outside(update):
         return False
@@ -105,8 +107,8 @@ async def handle_chat_member_update(
         user_id=user.id,
         user_full_name=user.full_name,
         timeout_seconds=settings.verify_timeout_seconds,
-        task_registry=verification_timeout_tasks,
-        countdown_task_registry=verification_countdown_tasks,
+        task_registry=verification_task_registries.timeout_tasks,
+        countdown_task_registry=verification_task_registries.countdown_tasks,
         logger=get_logger("app"),
     )
 
@@ -117,6 +119,7 @@ async def on_chat_member_update(
     pending_verification_repository: PendingVerificationRepository,
     blacklist_repository: BlacklistRepository,
     settings: Settings,
+    verification_task_registries: VerificationTaskRegistries,
 ) -> None:
     await handle_chat_member_update(
         update=update,
@@ -124,6 +127,7 @@ async def on_chat_member_update(
         pending_verification_repository=pending_verification_repository,
         blacklist_repository=blacklist_repository,
         settings=settings,
+        verification_task_registries=verification_task_registries,
     )
 
 
@@ -136,12 +140,13 @@ async def on_verify_callback(
     bot: Any,
     pending_verification_repository: PendingVerificationRepository,
     verified_user_repository: VerifiedUserRepository,
+    verification_task_registries: VerificationTaskRegistries,
 ) -> None:
     await complete_verification_from_callback(
         callback_query=callback_query,
         bot=bot,
         pending_verification_repository=pending_verification_repository,
         verified_user_repository=verified_user_repository,
-        task_registry=verification_timeout_tasks,
-        countdown_task_registry=verification_countdown_tasks,
+        task_registry=verification_task_registries.timeout_tasks,
+        countdown_task_registry=verification_task_registries.countdown_tasks,
     )

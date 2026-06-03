@@ -58,7 +58,7 @@ class DuplicateMessageState:
     user_id: int
     chat_id: int
     digest: str
-    normalized_text: str
+    content_key: str
     message_ids: tuple[int, ...]
 
     @classmethod
@@ -67,7 +67,7 @@ class DuplicateMessageState:
             user_id=int(data["user_id"]),
             chat_id=int(data["chat_id"]),
             digest=str(data["digest"]),
-            normalized_text=str(data["normalized_text"]),
+            content_key=str(data.get("content_key") or data["normalized_text"]),
             message_ids=tuple(int(message_id) for message_id in data["message_ids"]),
         )
 

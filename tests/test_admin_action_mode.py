@@ -31,13 +31,23 @@ class FakeRuntimeSettingsRepository:
     reset_called: bool = False
     notification_reset_called: bool = False
 
-    async def get_action_mode(self, *, default: ActionMode) -> ActionMode:
+    async def get_action_mode(
+        self,
+        *,
+        default: ActionMode,
+        chat_id: int | None = None,
+    ) -> ActionMode:
         return self.action_mode or default
 
-    async def set_action_mode(self, action_mode: ActionMode) -> None:
+    async def set_action_mode(
+        self,
+        action_mode: ActionMode,
+        *,
+        chat_id: int | None = None,
+    ) -> None:
         self.action_mode = action_mode
 
-    async def reset_action_mode(self) -> None:
+    async def reset_action_mode(self, *, chat_id: int | None = None) -> None:
         self.action_mode = None
         self.reset_called = True
 

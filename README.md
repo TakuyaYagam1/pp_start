@@ -10,7 +10,7 @@ Telegram-бот для защиты групп и топиков от спама
 - Корректная работа в Telegram-топиках через `message_thread_id`.
 - Быстрая проверка сообщений по стоп-словам.
 - Дополнительная LLM-проверка подозрительных сообщений.
-- Flood-защита: одинаковые сообщения подряд проверяются через LLM, удаляются с предупреждением, а повтор после предупреждения приводит к исключению.
+- Flood-защита: одинаковый текст, стикер или медиа подряд удаляются с предупреждением, а повтор после предупреждения приводит к исключению.
 - Два режима реакции на спам:
   - `delete`: удалить сообщение и заблокировать пользователя;
   - `notify_admin`: уведомить администратора.
@@ -87,7 +87,7 @@ PostgreSQL, Alembic, `app/database/` and `migrations/` are intentionally not inc
 
 После нажатия кнопки бот вызывает `approve_chat_join_request`, удаляет приватное challenge-сообщение, отправляет личное `✅ Готово, доступ открыт`, отмечает пользователя как verified и очищает pending-запись. Если timeout истек, бот отправляет личное `❌ Проверка не пройдена`, вызывает `decline_chat_join_request`, `ban_chat_member` и удаляет pending-запись.
 
-LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. В обычном spam-flow LLM вызывается только после совпадения stop-word. Отдельно бот отслеживает одинаковые сообщения подряд: при достижении `DUPLICATE_MESSAGE_WARN_THRESHOLD` LLM получает контекст flood-поведения, бот удаляет накопленные дубли и предупреждает пользователя, а следующий такой же повтор в течение `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` приводит к kick через ban/unban. Ответы `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе обычный stop-word flow применяет fallback на ключевые слова, а flood-flow не удаляет сообщение без подтверждения LLM.
+LLM-интеграция работает через OpenAI-compatible `/chat/completions`: задаются `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и timeout. В обычном spam-flow LLM вызывается только после совпадения stop-word. Для файлов без текста бот проверяет доступные метаданные: `file_name`, `mime_type`, emoji/set name стикера и caption. Отдельно бот детерминированно отслеживает одинаковые сообщения подряд: текст сравнивается по нормализованной строке, стикеры и медиа - по `file_unique_id`. При достижении `DUPLICATE_MESSAGE_WARN_THRESHOLD` бот удаляет накопленные дубли и предупреждает пользователя, а следующий такой же повтор в течение `DUPLICATE_MESSAGE_WARNING_TTL_SECONDS` приводит к kick через ban/unban. Ответы LLM `да/yes` считаются спамом, `нет/no` - не спамом; при timeout, ошибке или непонятном ответе обычный stop-word flow применяет fallback на ключевые слова.
 
 ## Словари stop-words
 
@@ -116,11 +116,39 @@ nano .env
 docker compose up -d --build
 ```
 
+То же через Makefile:
+
+```bash
+make env-init
+make install
+make up
+make logs-bot
+```
+
 Проверить состояние:
 
 ```bash
 docker compose ps
 docker compose logs -f bot
+```
+
+## Makefile
+
+Основные команды для разработки и деплоя:
+
+```bash
+make help          # список команд
+make install       # установка зависимостей .[dev]
+make test          # pytest -q
+make lint          # ruff check
+make fmt           # ruff format
+make check         # lint + format check + tests + compileall + compose config
+make up            # docker compose up -d --build
+make up-bot        # пересобрать и перезапустить только bot
+make logs-bot      # логи bot
+make redis-cli     # redis-cli внутри контейнера
+make spam-log      # tail /app/logs/spam.log внутри bot
+make clean         # удалить локальные cache-файлы
 ```
 
 Остановить:
@@ -190,7 +218,7 @@ LOG_FILE=/app/logs/spam.log
 
 В меню Telegram `/` бот программно регистрирует только `/admin`, `/help`, `/mode` и `/notify` при старте через `bot.set_my_commands`. Для обычных участников групп и обычных личных чатов меню очищается, а команды показываются через `BotCommandScopeAllChatAdministrators` и персональный scope для `ADMIN_ID`. Аргументы вроде `/mode delete` и `/notify me` показываются внутри `/admin`, потому что Telegram command menu хранит только название команды и короткое описание.
 
-Значение, заданное через `/mode delete` или `/mode notify_admin`, хранится в Redis в ключе `settings:action_mode` и имеет приоритет над `.env`. Команда `/mode reset` удаляет runtime override и возвращает режим из `ACTION_MODE`. Получатель из `/notify ...` хранится в Redis per-chat в ключе `settings:notification_target:{chat_id}`; numeric id отправляет уведомления в ЛС, `@username` оставляет уведомление в чате с mention.
+Значение, заданное через `/mode delete` или `/mode notify_admin`, хранится в Redis per-chat в ключе `settings:action_mode:{chat_id}` и имеет приоритет над `.env` только для конкретного чата. Старый глобальный ключ `settings:action_mode` читается как fallback для совместимости с ранними версиями. Команда `/mode reset` удаляет runtime override для текущего чата и возвращает режим из `ACTION_MODE`. Получатель из `/notify ...` хранится в Redis per-chat в ключе `settings:notification_target:{chat_id}`; numeric id отправляет уведомления в ЛС, `@username` оставляет уведомление в чате с mention.
 
 ## Запуск на сервере
 

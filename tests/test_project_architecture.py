@@ -16,6 +16,7 @@ from app.cache.redis import PendingVerificationRepository, RuntimeSettingsReposi
 from app.config import Settings
 from app.core.llm.client import LLMClient
 from app.core.models import ActionMode
+from app.core.services.verification import VerificationTaskRegistries
 from app.observability.logging import configure_logging
 from app.tg_bot.handlers import admin_router, user_router
 from app.tg_bot.handlers.moderation import router as moderation_router
@@ -30,6 +31,7 @@ def test_clean_architecture_import_paths_are_available() -> None:
     assert PendingVerificationRepository.__name__ == "PendingVerificationRepository"
     assert RuntimeSettingsRepository.__name__ == "RuntimeSettingsRepository"
     assert LLMClient.__name__ == "LLMClient"
+    assert VerificationTaskRegistries.__name__ == "VerificationTaskRegistries"
     assert configure_logging.__name__ == "configure_logging"
     assert admin_router.name == "admin"
     assert user_router.name == "user"
@@ -52,7 +54,9 @@ def test_project_files_match_clean_architecture() -> None:
         ".dockerignore",
         "docker-compose.yml",
         "Dockerfile",
+        "Makefile",
         "pyproject.toml",
+        "scripts/make_help.py",
         "app/__main__.py",
         "app/config/settings.py",
         "app/core/llm/client.py",
@@ -169,6 +173,45 @@ def test_application_uses_telegram_proxy_session_when_configured() -> None:
 
     assert captured_bot_kwargs["token"] == "token"
     assert captured_bot_kwargs["session"].proxy == "socks5://xray:10808"
+
+
+def test_application_owns_verification_task_registries() -> None:
+    class FakeBot:
+        def __init__(self, **kwargs: object) -> None:
+            self.session = object()
+
+    class FakeRedis:
+        pass
+
+    settings = Settings(
+        bot_token="token",
+        redis_url="redis://redis:6379/0",
+        verify_timeout_seconds=180,
+        action_mode=ActionMode.NOTIFY_ADMIN,
+        admin_username="@admin",
+        llm_api_key="llm-token",
+        llm_base_url="https://api.example.com/v1",
+        llm_model="model",
+        llm_timeout_seconds=8,
+        log_file="spam.log",
+    )
+
+    first = create_application(
+        settings,
+        bot_factory=FakeBot,
+        redis_client=FakeRedis(),
+    )
+    second = create_application(
+        settings,
+        bot_factory=FakeBot,
+        redis_client=FakeRedis(),
+    )
+
+    assert isinstance(first.verification_task_registries, VerificationTaskRegistries)
+    assert first.verification_task_registries is not second.verification_task_registries
+    assert first.dispatcher.workflow_data["verification_task_registries"] is (
+        first.verification_task_registries
+    )
 
 
 def test_bot_commands_are_registered_for_telegram_menu() -> None:

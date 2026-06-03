@@ -31,7 +31,7 @@ class ModerationService:
     ) -> SpamDetectionResult:
         chat_id = int(message.chat.id)
         user_id = int(message.from_user.id)
-        message_text = str(getattr(message, "text", "") or "")
+        message_text = _message_text_for_log(message)
         event_logger = logger or get_logger("app")
         admin_target = _resolve_notification_target(
             settings=settings,
@@ -90,7 +90,7 @@ class ModerationService:
         chat_id = int(message.chat.id)
         user_id = int(message.from_user.id)
         message_id = int(message.message_id)
-        message_text = str(getattr(message, "text", "") or "")
+        message_text = _message_text_for_log(message)
         event_logger = logger or get_logger("app")
 
         await call_telegram_api(
@@ -145,7 +145,7 @@ class ModerationService:
     ) -> SpamDetectionResult:
         chat_id = int(message.chat.id)
         user_id = int(message.from_user.id)
-        message_text = str(getattr(message, "text", "") or "")
+        message_text = _message_text_for_log(message)
         event_logger = logger or get_logger("app")
 
         await _delete_messages(
@@ -191,7 +191,7 @@ class ModerationService:
     ) -> SpamDetectionResult:
         chat_id = int(message.chat.id)
         user_id = int(message.from_user.id)
-        message_text = str(getattr(message, "text", "") or "")
+        message_text = _message_text_for_log(message)
         event_logger = logger or get_logger("app")
 
         await _delete_messages(
@@ -382,3 +382,38 @@ def build_message_reference(message: Any) -> str:
             return f"https://t.me/{public_username}/{message_id}"
 
     return f"chat_id={chat_id}; message_id={message_id}"
+
+
+def _message_text_for_log(message: Any) -> str:
+    text = getattr(message, "text", None)
+    if text:
+        return str(text)
+
+    caption = getattr(message, "caption", None)
+    if caption:
+        return str(caption)
+
+    for field in (
+        "sticker",
+        "animation",
+        "video",
+        "document",
+        "audio",
+        "voice",
+        "video_note",
+    ):
+        value = getattr(message, field, None)
+        file_unique_id = getattr(value, "file_unique_id", None)
+        if file_unique_id:
+            file_name = getattr(value, "file_name", None)
+            if file_name:
+                return f"[{field}:{file_unique_id}:{file_name}]"
+            return f"[{field}:{file_unique_id}]"
+
+    photos = getattr(message, "photo", None)
+    if photos:
+        file_unique_id = getattr(photos[-1], "file_unique_id", None)
+        if file_unique_id:
+            return f"[photo:{file_unique_id}]"
+
+    return "[non_text_message]"

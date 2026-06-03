@@ -9,6 +9,7 @@ from app.config import Settings
 
 APP_LOGGER_NAME = "app"
 LOG_FIELD_DEFAULT = "-"
+LOG_FIELD_MAX_LENGTH = 1000
 
 
 class RedactingStructuredFormatter(logging.Formatter):
@@ -105,12 +106,12 @@ def log_app_event(
         level,
         event,
         extra={
-            "event": event,
+            "event": _sanitize_log_value(event),
             "chat_id": chat_id if chat_id is not None else LOG_FIELD_DEFAULT,
             "user_id": user_id if user_id is not None else LOG_FIELD_DEFAULT,
-            "message_text": message_text or LOG_FIELD_DEFAULT,
-            "action": action or LOG_FIELD_DEFAULT,
-            "details": details or LOG_FIELD_DEFAULT,
+            "message_text": _sanitize_log_value(message_text),
+            "action": _sanitize_log_value(action),
+            "details": _sanitize_log_value(details),
         },
     )
 
@@ -133,3 +134,15 @@ def log_spam_event(
         action=action,
         details=details,
     )
+
+
+def _sanitize_log_value(value: object | None) -> str:
+    if value is None:
+        return LOG_FIELD_DEFAULT
+
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    if not text:
+        return LOG_FIELD_DEFAULT
+    if len(text) <= LOG_FIELD_MAX_LENGTH:
+        return text
+    return f"{text[:LOG_FIELD_MAX_LENGTH]}...[truncated]"

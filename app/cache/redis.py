@@ -15,6 +15,7 @@ LLM_CACHE_TTL_SECONDS = 3 * 24 * 60 * 60
 MIN_LLM_CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_LLM_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 ACTION_MODE_KEY = "settings:action_mode"
+ACTION_MODE_KEY_PREFIX = "settings:action_mode"
 NOTIFICATION_TARGET_KEY_PREFIX = "settings:notification_target"
 DUPLICATE_MESSAGE_KEY_PREFIX = "duplicate_message"
 DUPLICATE_MESSAGE_WARNING_KEY_PREFIX = "duplicate_message_warning"
@@ -184,13 +185,13 @@ class DuplicateMessageRepository:
         self._warning_ttl_seconds = warning_ttl_seconds
 
     @staticmethod
-    def normalize_text(text: str) -> str:
-        return " ".join(text.casefold().split())
+    def normalize_content_key(content_key: str) -> str:
+        return " ".join(content_key.casefold().split())
 
     @classmethod
-    def digest_text(cls, text: str) -> str:
-        normalized_text = cls.normalize_text(text)
-        return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    def digest_content_key(cls, content_key: str) -> str:
+        normalized_content_key = cls.normalize_content_key(content_key)
+        return hashlib.sha256(normalized_content_key.encode("utf-8")).hexdigest()
 
     @staticmethod
     def key(chat_id: int, user_id: int) -> str:
@@ -206,10 +207,10 @@ class DuplicateMessageRepository:
         chat_id: int,
         user_id: int,
         message_id: int,
-        message_text: str,
+        content_key: str,
     ) -> DuplicateMessageState:
-        normalized_text = self.normalize_text(message_text)
-        digest = self.digest_text(message_text)
+        normalized_content_key = self.normalize_content_key(content_key)
+        digest = self.digest_content_key(content_key)
         previous = await self.get(chat_id=chat_id, user_id=user_id)
         message_ids = (message_id,)
         if previous is not None and previous.digest == digest:
@@ -219,7 +220,7 @@ class DuplicateMessageRepository:
             user_id=user_id,
             chat_id=chat_id,
             digest=digest,
-            normalized_text=normalized_text,
+            content_key=normalized_content_key,
             message_ids=message_ids,
         )
         await self._redis.set(
@@ -267,22 +268,42 @@ class RuntimeSettingsRepository:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
-    async def get_action_mode(self, *, default: ActionMode) -> ActionMode:
-        raw = await self._redis.get(ACTION_MODE_KEY)
+    @staticmethod
+    def action_mode_key(chat_id: int | None = None) -> str:
+        if chat_id is None:
+            return ACTION_MODE_KEY
+        return f"{ACTION_MODE_KEY_PREFIX}:{chat_id}"
+
+    async def get_action_mode(
+        self,
+        *,
+        default: ActionMode,
+        chat_id: int | None = None,
+    ) -> ActionMode:
+        key = self.action_mode_key(chat_id)
+        raw = await self._redis.get(key)
+        if raw is None and chat_id is not None:
+            raw = await self._redis.get(ACTION_MODE_KEY)
+            key = ACTION_MODE_KEY
         if raw is None:
             return default
 
         try:
             return ActionMode(str(raw))
         except ValueError:
-            await self._redis.delete(ACTION_MODE_KEY)
+            await self._redis.delete(key)
             return default
 
-    async def set_action_mode(self, action_mode: ActionMode) -> None:
-        await self._redis.set(ACTION_MODE_KEY, action_mode.value)
+    async def set_action_mode(
+        self,
+        action_mode: ActionMode,
+        *,
+        chat_id: int | None = None,
+    ) -> None:
+        await self._redis.set(self.action_mode_key(chat_id), action_mode.value)
 
-    async def reset_action_mode(self) -> None:
-        await self._redis.delete(ACTION_MODE_KEY)
+    async def reset_action_mode(self, *, chat_id: int | None = None) -> None:
+        await self._redis.delete(self.action_mode_key(chat_id))
 
     @staticmethod
     def notification_target_key(chat_id: int) -> str:

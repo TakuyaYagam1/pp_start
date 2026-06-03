@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.types import Message
 
 from app.config import Settings
@@ -22,6 +22,16 @@ from app.core.services.spam_detector import SpamDetectorService
 
 router = Router(name="moderation")
 GROUP_CHAT_TYPES = {"group", "supergroup"}
+FILE_CONTENT_FIELDS = (
+    "sticker",
+    "animation",
+    "video",
+    "document",
+    "audio",
+    "voice",
+    "video_note",
+)
+FILE_METADATA_FIELDS = ("file_name", "mime_type", "emoji", "set_name")
 
 
 def _chat_type(message: Any) -> str:
@@ -35,6 +45,83 @@ def _is_bot_message(message: Any) -> bool:
     return bool(getattr(from_user, "is_bot", False))
 
 
+def _message_text(message: Any) -> str | None:
+    text = getattr(message, "text", None)
+    if text:
+        return str(text)
+
+    caption = getattr(message, "caption", None)
+    if caption:
+        return str(caption)
+
+    return None
+
+
+def _file_unique_content_key(message: Any) -> str | None:
+    for field in FILE_CONTENT_FIELDS:
+        value = getattr(message, field, None)
+        file_unique_id = getattr(value, "file_unique_id", None)
+        if file_unique_id:
+            return f"{field}:{file_unique_id}"
+
+    photos = getattr(message, "photo", None)
+    if photos:
+        file_unique_id = getattr(photos[-1], "file_unique_id", None)
+        if file_unique_id:
+            return f"photo:{file_unique_id}"
+
+    return None
+
+
+def _duplicate_content_key(message: Any) -> str | None:
+    file_content_key = _file_unique_content_key(message)
+    if file_content_key:
+        return file_content_key
+
+    text = _message_text(message)
+    if text:
+        return f"text:{DuplicateMessageRepository.normalize_content_key(text)}"
+
+    return None
+
+
+def _file_metadata_text(message: Any) -> str | None:
+    parts: list[str] = []
+    for field in FILE_CONTENT_FIELDS:
+        value = getattr(message, field, None)
+        if value is None:
+            continue
+
+        for metadata_field in FILE_METADATA_FIELDS:
+            metadata_value = getattr(value, metadata_field, None)
+            if metadata_value:
+                parts.append(str(metadata_value))
+
+    if not parts:
+        return None
+
+    return " ".join(parts)
+
+
+def _message_spam_text(message: Any) -> str | None:
+    parts = [
+        part
+        for part in (
+            _message_text(message),
+            _file_metadata_text(message),
+        )
+        if part
+    ]
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _is_command_message(message: Any) -> bool:
+    text = getattr(message, "text", None)
+    return isinstance(text, str) and text.startswith("/")
+
+
 async def handle_text_message(
     *,
     message: Message,
@@ -46,11 +133,10 @@ async def handle_text_message(
     duplicate_message_repository: DuplicateMessageRepository | None = None,
     bot: Any | None = None,
 ) -> SpamDetectionResult | None:
-    text = getattr(message, "text", None)
     if (
-        not text
-        or _chat_type(message) not in GROUP_CHAT_TYPES
+        _chat_type(message) not in GROUP_CHAT_TYPES
         or _is_bot_message(message)
+        or _is_command_message(message)
     ):
         return None
 
@@ -61,18 +147,23 @@ async def handle_text_message(
     if user_id is None or chat_id is None:
         return None
 
+    content_key = _duplicate_content_key(message)
     flood_result = await _handle_duplicate_flood(
         message=message,
-        spam_detector_service=spam_detector_service,
         duplicate_message_repository=duplicate_message_repository,
         settings=settings,
         moderation_service=moderation_service,
         bot=bot,
+        content_key=content_key,
     )
     if flood_result is not None:
         return flood_result
 
-    result = await spam_detector_service.detect(text)
+    spam_text = _message_spam_text(message)
+    if not spam_text:
+        return None
+
+    result = await spam_detector_service.detect(spam_text)
     return await _apply_moderation_action(
         message=message,
         result=result,
@@ -87,32 +178,32 @@ async def handle_text_message(
 async def _handle_duplicate_flood(
     *,
     message: Message,
-    spam_detector_service: SpamDetectorService,
     duplicate_message_repository: DuplicateMessageRepository | None,
     settings: Settings | None,
     moderation_service: ModerationService | None,
     bot: Any | None,
+    content_key: str | None,
 ) -> SpamDetectionResult | None:
     if (
         duplicate_message_repository is None
         or settings is None
         or moderation_service is None
         or bot is None
+        or content_key is None
     ):
         return None
 
-    message_text = str(getattr(message, "text", "") or "")
     message_id = getattr(message, "message_id", None)
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     user_id = getattr(getattr(message, "from_user", None), "id", None)
-    if not message_text or message_id is None or chat_id is None or user_id is None:
+    if message_id is None or chat_id is None or user_id is None:
         return None
 
     state = await duplicate_message_repository.record_message(
         chat_id=int(chat_id),
         user_id=int(user_id),
         message_id=int(message_id),
-        message_text=message_text,
+        content_key=content_key,
     )
     warned_digest = await duplicate_message_repository.get_warning_digest(
         chat_id=int(chat_id),
@@ -124,7 +215,7 @@ async def _handle_duplicate_flood(
             reason="duplicate_flood_repeated_after_warning",
             stop_word=StopWordCheckResult(matched=False),
             llm_decision=LLMDecision.SPAM,
-            matched_term="duplicate_message",
+            matched_term="duplicate_content",
         )
         moderation_result = await moderation_service.kick_duplicate_flood(
             bot=bot,
@@ -144,13 +235,13 @@ async def _handle_duplicate_flood(
     if len(state.message_ids) < settings.duplicate_message_warn_threshold:
         return None
 
-    result = await spam_detector_service.detect_duplicate_flood(
-        message_text,
-        duplicate_count=len(state.message_ids),
+    result = SpamDetectionResult(
+        is_spam=True,
+        reason="duplicate_flood",
+        stop_word=StopWordCheckResult(matched=False),
+        llm_decision=LLMDecision.UNKNOWN,
+        matched_term="duplicate_content",
     )
-    if not result.is_spam:
-        return None
-
     moderation_result = await moderation_service.warn_duplicate_flood(
         bot=bot,
         message=message,
@@ -187,7 +278,8 @@ async def _apply_moderation_action(
     action_mode = settings.action_mode
     if runtime_settings_repository is not None:
         action_mode = await runtime_settings_repository.get_action_mode(
-            default=settings.action_mode
+            default=settings.action_mode,
+            chat_id=int(message.chat.id),
         )
 
     if action_mode == ActionMode.DELETE:
@@ -217,8 +309,8 @@ async def _apply_moderation_action(
     return result
 
 
-@router.message(F.text)
-async def on_text_message(
+@router.message()
+async def on_chat_message(
     message: Message,
     bot: Any,
     settings: Settings,
