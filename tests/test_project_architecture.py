@@ -32,6 +32,7 @@ from app.infrastructure.redis import (
     RuntimeSettingsRepository,
 )
 from app.observability.logging import configure_logging
+from app.usecase.moderation import AutoDeleteTaskRegistry
 from app.usecase.verification import VerificationTaskRegistry
 
 
@@ -72,6 +73,7 @@ def test_project_files_match_clean_architecture() -> None:
         "app/bootstrap/application.py",
         "app/bootstrap/command.py",
         "app/bootstrap/lifecycle.py",
+        "app/bootstrap/verification_restore.py",
         "app/bootstrap/verification_timer.py",
         "app/config/settings.py",
         "app/domain/moderation.py",
@@ -80,14 +82,15 @@ def test_project_files_match_clean_architecture() -> None:
         "app/domain/verification.py",
         "app/usecase/contract.py",
         "app/usecase/moderation/action.py",
+        "app/usecase/moderation/auto_delete.py",
         "app/usecase/moderation/flood_action.py",
         "app/usecase/moderation/message.py",
         "app/usecase/moderation/notification.py",
         "app/usecase/moderation/spam_detector.py",
+        "app/usecase/moderation/stop_word_action.py",
         "app/usecase/verification/message.py",
         "app/usecase/verification/approval.py",
         "app/usecase/verification/challenge.py",
-        "app/usecase/verification/countdown.py",
         "app/usecase/verification/flow.py",
         "app/usecase/verification/permission.py",
         "app/usecase/verification/task.py",
@@ -97,7 +100,9 @@ def test_project_files_match_clean_architecture() -> None:
         "app/infrastructure/redis/repository/verified_user.py",
         "app/infrastructure/redis/repository/runtime_setting.py",
         "app/infrastructure/redis/repository/duplicate_message.py",
+        "app/infrastructure/redis/repository/auto_delete_message.py",
         "app/infrastructure/redis/repository/llm_cache.py",
+        "app/infrastructure/redis/repository/stop_word_warning.py",
         "app/infrastructure/llm/client.py",
         "app/infrastructure/llm/prompt.py",
         "app/domain/data/stopword/spam_ru.txt",
@@ -106,6 +111,7 @@ def test_project_files_match_clean_architecture() -> None:
         "app/bot/controller/__init__.py",
         "app/bot/controller/v1/__init__.py",
         "app/bot/controller/v1/admin/__init__.py",
+        "app/bot/controller/v1/admin/argument.py",
         "app/bot/controller/v1/admin/callback.py",
         "app/bot/controller/v1/admin/command.py",
         "app/bot/controller/v1/admin/panel.py",
@@ -269,7 +275,7 @@ def test_application_uses_telegram_proxy_session_when_configured() -> None:
     assert captured_bot_kwargs["session"].proxy == "socks5://xray:10808"
 
 
-def test_application_owns_verification_task_registry() -> None:
+def test_application_owns_runtime_task_registries() -> None:
     class FakeBot:
         def __init__(self, **kwargs: object) -> None:
             self.session = object()
@@ -302,9 +308,14 @@ def test_application_owns_verification_task_registry() -> None:
     )
 
     assert isinstance(first.verification_task_registry, VerificationTaskRegistry)
+    assert isinstance(first.auto_delete_task_registry, AutoDeleteTaskRegistry)
     assert first.verification_task_registry is not second.verification_task_registry
+    assert first.auto_delete_task_registry is not second.auto_delete_task_registry
     assert first.dispatcher.workflow_data["verification_task_registry"] is (
         first.verification_task_registry
+    )
+    assert first.dispatcher.workflow_data["auto_delete_task_registry"] is (
+        first.auto_delete_task_registry
     )
 
 

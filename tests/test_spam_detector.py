@@ -60,14 +60,20 @@ class FakeLLMClient:
 @dataclass
 class FakeLLMCacheRepository:
     cached_answer: str | None = None
+    get_error: Exception | None = None
+    set_error: Exception | None = None
     stored: list[tuple[str, str]] = field(default_factory=list)
     get_calls: list[str] = field(default_factory=list)
 
     async def get(self, text: str) -> str | None:
         self.get_calls.append(text)
+        if self.get_error is not None:
+            raise self.get_error
         return self.cached_answer
 
     async def set(self, text: str, result: str) -> None:
+        if self.set_error is not None:
+            raise self.set_error
         self.stored.append((text, result))
 
 
@@ -147,6 +153,40 @@ def test_ask_llm_with_cache_stores_cache_miss_answer() -> None:
         assert answer == "yes"
         assert cache.get_calls == ["казино"]
         assert cache.stored == [("казино", "yes")]
+        assert llm_client.calls == ["казино"]
+
+    asyncio.run(run())
+
+
+def test_ask_llm_with_cache_uses_llm_when_cache_read_fails() -> None:
+    async def run() -> None:
+        llm_client = FakeLLMClient(answers=["no"])
+        cache = FakeLLMCacheRepository(get_error=RuntimeError("redis failed"))
+        answer = await SpamDetectorService(
+            llm_client=llm_client,
+            llm_cache_repository=cache,
+        ).ask_llm_with_cache("казино")
+
+        assert answer == "no"
+        assert cache.get_calls == ["казино"]
+        assert cache.stored == [("казино", "no")]
+        assert llm_client.calls == ["казино"]
+
+    asyncio.run(run())
+
+
+def test_ask_llm_with_cache_returns_llm_answer_when_cache_write_fails() -> None:
+    async def run() -> None:
+        llm_client = FakeLLMClient(answers=["no"])
+        cache = FakeLLMCacheRepository(set_error=RuntimeError("redis failed"))
+        answer = await SpamDetectorService(
+            llm_client=llm_client,
+            llm_cache_repository=cache,
+        ).ask_llm_with_cache("казино")
+
+        assert answer == "no"
+        assert cache.get_calls == ["казино"]
+        assert cache.stored == []
         assert llm_client.calls == ["казино"]
 
     asyncio.run(run())
