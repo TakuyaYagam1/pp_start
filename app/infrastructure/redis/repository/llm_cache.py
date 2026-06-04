@@ -6,7 +6,7 @@ import hashlib
 
 from redis.asyncio import Redis
 
-from app.infrastructure.redis.client import redis_value_to_str
+from app.infrastructure.redis.client import redis_ttl_or_none, redis_value_to_str
 
 LLM_CACHE_TTL_SECONDS = 5 * 60
 MIN_LLM_CACHE_TTL_SECONDS = 60
@@ -44,7 +44,4 @@ class LLMResultCacheRepository:
         await self._redis.set(self.key(text), result, ex=self._ttl_seconds)
 
     async def get_ttl(self, text: str) -> int | None:
-        ttl = await self._redis.ttl(self.key(text))
-        if ttl < 0:
-            return None
-        return ttl
+        return await redis_ttl_or_none(self._redis, self.key(text))

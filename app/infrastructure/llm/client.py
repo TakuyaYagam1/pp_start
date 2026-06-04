@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from app.config import Settings
-from app.infrastructure.llm.prompt import build_spam_detection_prompt
+from app.infrastructure.llm.prompt import build_spam_detection_messages
 
 
 class LLMClientError(RuntimeError):
@@ -30,6 +31,8 @@ class LLMClient:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._client_factory = client_factory or httpx.AsyncClient
+        self._client: Any | None = None
+        self._client_lock: asyncio.Lock | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> LLMClient:
@@ -43,12 +46,7 @@ class LLMClient:
     async def ask_is_spam(self, message_text: str) -> str:
         payload = {
             "model": self._model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": build_spam_detection_prompt(message_text),
-                }
-            ],
+            "messages": build_spam_detection_messages(message_text),
             "temperature": 0,
             "max_tokens": 3,
         }
@@ -58,14 +56,14 @@ class LLMClient:
         }
 
         try:
-            async with self._client_factory(timeout=self._timeout_seconds) as client:
-                response = await client.post(
-                    self._chat_completions_url,
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
+            client = await self._get_client()
+            response = await client.post(
+                self._chat_completions_url,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
         except httpx.TimeoutException as exc:
             raise LLMClientError("LLM request timed out") from exc
         except httpx.HTTPError as exc:
@@ -82,3 +80,22 @@ class LLMClient:
             raise LLMClientError("LLM response content is not text")
 
         return content.strip()
+
+    async def aclose(self) -> None:
+        if self._client is None:
+            return
+
+        client = self._client
+        self._client = None
+        close = getattr(client, "aclose", None)
+        if callable(close):
+            await close()
+
+    async def _get_client(self) -> Any:
+        if self._client is None:
+            if self._client_lock is None:
+                self._client_lock = asyncio.Lock()
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = self._client_factory(timeout=self._timeout_seconds)
+        return self._client

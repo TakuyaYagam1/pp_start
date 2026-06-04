@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
 from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 
 from app.domain import PendingVerification
+from app.infrastructure.redis.client import (
+    delete_redis_key,
+    get_redis_json_model,
+    redis_ttl_or_none,
+    set_redis_json_model,
+)
 
 
 class PendingVerificationRepository:
@@ -37,25 +41,24 @@ class PendingVerificationRepository:
             message_thread_id=message_thread_id,
             verification_chat_id=verification_chat_id,
         )
-        await self._redis.set(
+        await set_redis_json_model(
+            self._redis,
             self.key(chat_id, user_id),
-            json.dumps(asdict(pending), ensure_ascii=False),
+            pending,
             ex=self._ttl_seconds,
         )
         return pending
 
     async def get(self, *, chat_id: int, user_id: int) -> PendingVerification | None:
-        raw = await self._redis.get(self.key(chat_id, user_id))
-        if raw is None:
-            return None
-        return PendingVerification.from_mapping(json.loads(raw))
+        key = self.key(chat_id, user_id)
+        return await get_redis_json_model(
+            self._redis,
+            key,
+            PendingVerification.from_mapping,
+        )
 
     async def delete(self, *, chat_id: int, user_id: int) -> bool:
-        deleted = await self._redis.delete(self.key(chat_id, user_id))
-        return deleted > 0
+        return await delete_redis_key(self._redis, self.key(chat_id, user_id))
 
     async def get_ttl(self, *, chat_id: int, user_id: int) -> int | None:
-        ttl = await self._redis.ttl(self.key(chat_id, user_id))
-        if ttl < 0:
-            return None
-        return ttl
+        return await redis_ttl_or_none(self._redis, self.key(chat_id, user_id))

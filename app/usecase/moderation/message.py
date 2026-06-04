@@ -1,8 +1,49 @@
-"""Moderation message formatting helpers for logs and Telegram notifications"""
+"""Moderation message context and formatting helpers"""
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from typing import Any
+
+from app.observability.logging import get_logger
+
+SPAM_NOTIFICATION_MAX_LENGTH = 3900
+SPAM_NOTIFICATION_TRUNCATED_SUFFIX = "\n[message truncated]"
+
+
+@dataclass(frozen=True)
+class ModerationMessageContext:
+    chat_id: int
+    user_id: int
+    message_id: int
+    message_text: str
+    logger: logging.Logger
+
+
+def build_moderation_message_context(
+    message: Any,
+    *,
+    logger: logging.Logger | None = None,
+) -> ModerationMessageContext:
+    return ModerationMessageContext(
+        chat_id=int(message.chat.id),
+        user_id=int(message.from_user.id),
+        message_id=int(message.message_id),
+        message_text=message_text_for_log(message),
+        logger=logger or get_logger("app"),
+    )
+
+
+def truncate_message_text(text: str, *, max_length: int) -> str:
+    if len(text) <= max_length:
+        return text
+    if max_length <= len(SPAM_NOTIFICATION_TRUNCATED_SUFFIX):
+        return SPAM_NOTIFICATION_TRUNCATED_SUFFIX[:max_length]
+    return (
+        text[: max_length - len(SPAM_NOTIFICATION_TRUNCATED_SUFFIX)]
+        + SPAM_NOTIFICATION_TRUNCATED_SUFFIX
+    )
 
 
 def build_spam_notification_text(
@@ -14,14 +55,16 @@ def build_spam_notification_text(
     message_reference: str,
     message_text: str,
 ) -> str:
-    return (
+    prefix = (
         f"{admin_target_text}, обнаружен спам.\n"
         f"Пользователь: {spammer}\n"
         f"user_id: {user_id}\n"
         f"Причина: {reason}\n"
         f"Сообщение: {message_reference}\n"
-        f"Текст: {message_text}"
+        "Текст: "
     )
+    message_text_budget = max(0, SPAM_NOTIFICATION_MAX_LENGTH - len(prefix))
+    return prefix + truncate_message_text(message_text, max_length=message_text_budget)
 
 
 def format_spammer(from_user: Any) -> str:

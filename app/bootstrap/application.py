@@ -16,15 +16,17 @@ from app.bot.middleware import RedisMiddleware
 from app.config import Settings
 from app.infrastructure.llm.client import LLMClient
 from app.infrastructure.redis import (
+    AutoDeleteMessageRepository,
     DuplicateMessageRepository,
     LLMResultCacheRepository,
     PendingVerificationRepository,
     RuntimeSettingsRepository,
+    StopWordWarningRepository,
     VerifiedUserRepository,
     create_redis_client,
 )
 from app.observability.logging import configure_logging
-from app.usecase.moderation import ModerationService
+from app.usecase.moderation import AutoDeleteTaskRegistry, ModerationService
 from app.usecase.moderation.spam_detector import SpamDetectorService
 from app.usecase.verification import VerificationTaskRegistry
 
@@ -43,6 +45,7 @@ class BotApplication:
     redis_client: Any
     settings: Settings
     verification_task_registry: VerificationTaskRegistry
+    auto_delete_task_registry: AutoDeleteTaskRegistry
     allowed_updates: tuple[str, ...] = ALLOWED_UPDATES
 
 
@@ -92,6 +95,17 @@ def create_application(
         redis,
         ttl_seconds=resolved_settings.duplicate_message_window_seconds,
         warning_ttl_seconds=resolved_settings.duplicate_message_warning_ttl_seconds,
+        warning_grace_seconds=resolved_settings.duplicate_message_kick_grace_seconds,
+    )
+    stop_word_warning_repository = StopWordWarningRepository(
+        redis,
+        ttl_seconds=resolved_settings.stop_word_warning_ttl_seconds,
+    )
+    auto_delete_message_repository = AutoDeleteMessageRepository(
+        redis,
+        cleanup_grace_seconds=(
+            resolved_settings.auto_delete_message_cleanup_grace_seconds
+        ),
     )
     llm_cache_repository = LLMResultCacheRepository(
         redis,
@@ -104,6 +118,7 @@ def create_application(
     )
     moderation_service = ModerationService()
     verification_task_registry = VerificationTaskRegistry()
+    auto_delete_task_registry = AutoDeleteTaskRegistry()
 
     dispatcher.update.outer_middleware(RedisMiddleware(redis))
     include_application_router(dispatcher, admin_router)
@@ -117,11 +132,14 @@ def create_application(
             "verified_user_repository": verified_user_repository,
             "runtime_settings_repository": runtime_settings_repository,
             "duplicate_message_repository": duplicate_message_repository,
+            "stop_word_warning_repository": stop_word_warning_repository,
+            "auto_delete_message_repository": auto_delete_message_repository,
             "llm_client": llm_client,
             "llm_cache_repository": llm_cache_repository,
             "spam_detector_service": spam_detector_service,
             "moderation_service": moderation_service,
             "verification_task_registry": verification_task_registry,
+            "auto_delete_task_registry": auto_delete_task_registry,
         }
     )
     dispatcher.startup.register(on_startup)
@@ -133,6 +151,7 @@ def create_application(
         redis_client=redis,
         settings=resolved_settings,
         verification_task_registry=verification_task_registry,
+        auto_delete_task_registry=auto_delete_task_registry,
     )
 
 

@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.bot.util.telegram_api import call_telegram_api
+from app.bot.util.telegram_message import (
+    build_send_message_kwargs,
+    message_thread_id_from_message,
+)
 from app.config import Settings
 from app.domain import ModerationAction
 
@@ -70,14 +74,17 @@ async def send_admin_notification(
     message_text: str,
     logger: logging.Logger,
 ) -> None:
-    send_kwargs: dict[str, Any] = {"text": text}
     if target.kind == "user_id":
-        send_kwargs["chat_id"] = int(target.value)
+        send_kwargs = build_send_message_kwargs(
+            chat_id=int(target.value),
+            text=text,
+        )
     else:
-        send_kwargs["chat_id"] = group_chat_id
-        message_thread_id = getattr(message, "message_thread_id", None)
-        if message_thread_id is not None:
-            send_kwargs["message_thread_id"] = int(message_thread_id)
+        send_kwargs = build_send_message_kwargs(
+            chat_id=group_chat_id,
+            text=text,
+            message_thread_id=message_thread_id_from_message(message),
+        )
 
     await call_telegram_api(
         operation=ModerationAction.NOTIFY_ADMIN.value,

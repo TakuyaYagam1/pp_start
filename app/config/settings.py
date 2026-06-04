@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     duplicate_message_window_seconds: int = Field(default=60, gt=0)
     duplicate_message_warn_threshold: int = Field(default=3, gt=1)
     duplicate_message_warning_ttl_seconds: int = Field(default=300, gt=0)
+    duplicate_message_kick_grace_seconds: int = Field(default=3, ge=0)
     duplicate_warning_message_ttl_seconds: int = Field(default=60, gt=0)
+    stop_word_warning_ttl_seconds: int = Field(default=300, gt=0)
+    stop_word_warning_message_ttl_seconds: int = Field(default=60, gt=0)
+    auto_delete_message_cleanup_grace_seconds: int = Field(default=86400, gt=0)
     action_mode: ActionMode
     admin_username: str | None = None
     admin_id: int | None = None

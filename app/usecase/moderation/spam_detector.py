@@ -106,7 +106,10 @@ class SpamDetectorService:
 
     async def ask_llm_with_cache(self, message_text: str) -> str:
         if self._llm_cache_repository is not None:
-            cached_answer = await self._llm_cache_repository.get(message_text)
+            cached_answer = await get_cached_llm_answer(
+                self._llm_cache_repository,
+                message_text,
+            )
             if cached_answer is not None:
                 return cached_answer
 
@@ -115,7 +118,11 @@ class SpamDetectorService:
 
         answer = await self._llm_client.ask_is_spam(message_text)
         if self._llm_cache_repository is not None:
-            await self._llm_cache_repository.set(message_text, answer)
+            await set_cached_llm_answer(
+                self._llm_cache_repository,
+                message_text,
+                answer,
+            )
         return answer
 
     async def detect(
@@ -142,3 +149,24 @@ class SpamDetectorService:
             stop_word=stop_word,
             llm_answer=llm_answer,
         )
+
+
+async def get_cached_llm_answer(
+    cache_repository: LLMResultCache,
+    message_text: str,
+) -> str | None:
+    try:
+        return await cache_repository.get(message_text)
+    except Exception:
+        return None
+
+
+async def set_cached_llm_answer(
+    cache_repository: LLMResultCache,
+    message_text: str,
+    answer: str,
+) -> None:
+    try:
+        await cache_repository.set(message_text, answer)
+    except Exception:
+        return

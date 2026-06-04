@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
-from app.domain import ActionMode, DuplicateMessageState, PendingVerification
+from app.domain import (
+    ActionMode,
+    AutoDeleteMessage,
+    DuplicateMessageState,
+    PendingVerification,
+)
 
 
 class PendingVerificationStore(Protocol):
@@ -97,7 +103,38 @@ class DuplicateMessageStore(Protocol):
         digest: str,
     ) -> bool: ...
 
+    async def has_warning_grace(self, *, chat_id: int, user_id: int) -> bool: ...
+
     async def clear_warning(self, *, chat_id: int, user_id: int) -> None: ...
+
+
+class StopWordWarningStore(Protocol):
+    async def get_warned_term(self, *, chat_id: int, user_id: int) -> str | None: ...
+
+    async def mark_warned_once(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        matched_term: str,
+    ) -> bool: ...
+
+    async def clear(self, *, chat_id: int, user_id: int) -> None: ...
+
+
+class AutoDeleteMessageStore(Protocol):
+    async def create(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        delete_at: datetime,
+        user_id: int | None = None,
+    ) -> AutoDeleteMessage: ...
+
+    async def list(self) -> tuple[AutoDeleteMessage, ...]: ...
+
+    async def delete(self, *, chat_id: int, message_id: int) -> bool: ...
 
 
 class LLMSpamClient(Protocol):

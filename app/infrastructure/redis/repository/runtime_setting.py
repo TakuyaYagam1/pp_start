@@ -36,8 +36,12 @@ class RuntimeSettingsRepository:
         if raw is None:
             return default
 
+        raw_text = redis_value_to_str(raw)
+        if raw_text is None:
+            return default
+
         try:
-            return ActionMode(str(raw))
+            return ActionMode(raw_text)
         except ValueError:
             await self._redis.delete(key)
             return default
@@ -51,7 +55,12 @@ class RuntimeSettingsRepository:
         await self._redis.set(self.action_mode_key(chat_id), action_mode.value)
 
     async def reset_action_mode(self, *, chat_id: int | None = None) -> None:
+        if chat_id is None:
+            await self._redis.delete(ACTION_MODE_KEY)
+            return
+
         await self._redis.delete(self.action_mode_key(chat_id))
+        await self._redis.delete(ACTION_MODE_KEY)
 
     @staticmethod
     def notification_target_key(chat_id: int) -> str:

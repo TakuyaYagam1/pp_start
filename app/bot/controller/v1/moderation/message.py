@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 GROUP_CHAT_TYPES = {"group", "supergroup"}
+ADMIN_STATUSES = {"administrator", "creator"}
 FILE_CONTENT_FIELDS = (
     "sticker",
     "animation",
@@ -27,6 +28,29 @@ def chat_type(message: Any) -> str:
 def is_bot_message(message: Any) -> bool:
     from_user = getattr(message, "from_user", None)
     return bool(getattr(from_user, "is_bot", False))
+
+
+async def is_chat_admin_sender(*, message: Any, bot: Any | None) -> bool:
+    if bot is None or chat_type(message) not in GROUP_CHAT_TYPES:
+        return False
+
+    get_chat_member = getattr(bot, "get_chat_member", None)
+    if not callable(get_chat_member):
+        return False
+
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    if chat_id is None or user_id is None:
+        return False
+
+    try:
+        member = await get_chat_member(chat_id=int(chat_id), user_id=int(user_id))
+    except Exception:
+        return False
+
+    status = getattr(member, "status", None)
+    status_value = str(getattr(status, "value", status)).lower()
+    return status_value in ADMIN_STATUSES
 
 
 def message_text(message: Any) -> str | None:
